@@ -1,0 +1,156 @@
+# 🛡️ AsohCloak
+
+**AsohCloak** is a authentication & authorization REST API built with Spring Boot and Keycloak. It exists first and foremost as a hands-on deep dive into building a **production-style Role-Based Access Control (RBAC) system** on top of Keycloak — with School Management features layered on top once the security foundation is solid. 🎓
+
+---
+
+## 🎯 Project Goal
+
+The primary purpose of this project is to **master authentication and authorization with Spring Boot + Keycloak** — understanding how to delegate identity, token issuance, and access control entirely to Keycloak rather than hand-rolling auth logic. School Management functionality (students, bursars, admins, academic records, etc.) is the *next* phase, built on top of this security foundation.
+
+> 🔐 **Design principle:** Keycloak owns *everything* about security in this system — user credentials, token issuance, brute-force protection, and role management. AsohCloak's Spring Boot layer is a resource server + a thin orchestrator that talks to Keycloak's Admin API. No passwords or tokens are minted by this application itself.
+
+---
+
+## ✨ Key Features
+
+- 📝 **Registration** — create a new user account (provisioned through Keycloak)
+- 🔑 **Login** — issues short-lived access & refresh tokens *only* during the login step
+- 🚪 **Logout** — revokes the active session/tokens
+- 🔒 **Forgot Password** — initiate a password-reset flow
+- ♻️ **Reset Password** — complete the password reset
+- ⛔ **Block User** — administratively disable an account
+- ✅ **Unblock User** — re-enable a previously blocked account
+- 🔢 **Verify OTP Code** — one-time-passcode verification for passwordless / 2FA flows
+- 🔁 **Resend OTP Code** — request a fresh OTP when the previous one expires
+- ✉️ **Send Magic Link** — passwordless login link delivered by email
+- 🪄 **Login via Magic Link** — authenticate by clicking the emailed link
+- 🎭 **Role-Based Access Control (RBAC)** — fine-grained authorization driven by Keycloak realm roles
+
+---
+
+## 🧰 Tech Stack
+
+| Category | Technology |
+|---|---|
+| ☕ Language | **Java 25** |
+| 🍃 Framework | **Spring Boot 4.1.1** |
+| 🔐 Identity & Access Management | **Keycloak** (Admin REST API + custom SPI for OTP / magic-link) |
+| 🛡️ Security | **Spring Security** (OAuth2 Resource Server, JWT validation) |
+| 🗄️ Database | **PostgreSQL** |
+| 📦 ORM | **Spring Data JPA** / Hibernate |
+| 🧬 Schema Migrations | **Flyway** |
+| 🗺️ Object Mapping | **MapStruct** |
+| ✂️ Boilerplate Reduction | **Lombok** |
+| ⚡ Caching / Ephemeral Storage | **Redis** *(planned — not yet wired into the project; intended for OTP codes & magic-link tokens)* |
+| 📧 Transactional Email | **Resend** |
+| 🪣 Object Storage | **MinIO** |
+| 📖 API Documentation | **springdoc-openapi** (Swagger UI) |
+| 🐳 Containerization | **Docker** (multi-stage build) |
+| 🏗️ Build Tool | **Maven** |
+
+---
+
+## 🏛️ Architecture Overview
+
+```
+┌─────────────┐        ┌──────────────────┐        ┌─────────────┐
+│   React     │──────▶ │   AsohCloak API   │──────▶ │  Keycloak   │
+│  Frontend   │  REST  │ (Resource Server) │ Admin  │  (Identity  │
+└─────────────┘        └────────┬──────────┘  API   │   Provider) │
+                                 │                    └─────────────┘
+                          ┌──────┴──────┐
+                          │             │
+                     ┌────▼───┐   ┌─────▼─────┐
+                     │Postgres│   │   MinIO    │
+                     │ (data) │   │ (storage)  │
+                     └────────┘   └────────────┘
+```
+
+- AsohCloak validates every incoming request as an **OAuth2 resource server**, checking JWTs issued by Keycloak.
+- Registration, login, block/unblock, and password flows call **Keycloak's Admin REST API** rather than managing credentials locally.
+- OTP verification and Magic Link login are implemented as a **custom Keycloak SPI** (a separate Maven project, `asohcloak-keycloak-providers`), keeping Keycloak as the single source of truth for auth even for flows it doesn't support out of the box.
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- ☕ JDK 25
+- 🐳 Docker & Docker Compose
+- 📦 Maven (or use the bundled `./mvnw` wrapper)
+- 🗄️ A running PostgreSQL instance (or use `docker-compose`)
+- 🔐 A running Keycloak instance with a configured realm
+
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/asohyannick/asohCloak.git
+cd asohCloak
+```
+
+### 2. Configure your environment
+
+Copy the example env file and fill in real values:
+
+```bash
+cp .env.example .env
+```
+
+Fill in your Postgres, Resend, MinIO, and Keycloak credentials in `.env`. **Never commit your real `.env` file.**
+
+### 3. Run the app
+
+```bash
+./mvnw spring-boot:run
+```
+
+Or via Docker:
+
+```bash
+docker build -t asohcloak .
+docker run --env-file .env -p 8080:8080 asohcloak
+```
+
+### 4. Explore the API
+
+Once running, Swagger UI is available at:
+
+```
+http://localhost:8080/api/v1/swagger-ui.html
+```
+
+---
+
+## 🤝 Contributing / Onboarding Guide
+
+Welcome aboard! 👋 Here's how to get productive quickly:
+
+1. **📖 Read this README fully** before touching code — it explains *why* Keycloak owns security, which matters for every PR touching auth.
+2. **🌱 Branch naming** — use `feature/<short-description>`, `fix/<short-description>`, or `chore/<short-description>`.
+3. **✅ Before opening a PR:**
+   - Run `./mvnw clean verify` locally.
+   - Make sure Flyway migrations are added for any schema change (`src/main/resources/db/migration/V{n}__description.sql`) — never edit an already-merged migration file.
+   - Keep entities, DTOs, and MapStruct mappers in sync — a MapStruct build failure usually means a missing `mapstruct-processor` step or a field mismatch.
+4. **🔐 Security-sensitive changes** (anything touching auth, tokens, or the Keycloak SPI project) should be flagged clearly in the PR description and reviewed with extra care.
+5. **🎨 Code style** — follow existing package structure (`controller`, `dto`, `entity`, `repository`, `service`, `mapper`, `exception`). Use Lombok annotations consistently (`@Getter`/`@Setter` over manual boilerplate).
+6. **💬 Commit messages** — keep them short, imperative, and descriptive (e.g. `Add OTP resend endpoint`, not `fixed stuff`).
+7. **🧪 Tests** — new endpoints should include at least a basic integration test; security-related endpoints should test both authorized and unauthorized access paths.
+8. **❓ Questions?** Open a GitHub Discussion or Issue rather than guessing — especially around the Keycloak SPI project, since it has its own separate build/deploy process from the main API.
+
+---
+
+## 🗺️ Roadmap
+
+- [x] Core Keycloak-backed authentication & RBAC
+- [x] OTP verification flow
+- [x] Magic link passwordless login
+- [ ] Redis integration for OTP/token TTL storage
+- [ ] 🏫 School Management module (students, bursars, academic records)
+
+---
+
+## 📄 License
+
+_Add your chosen license here._
