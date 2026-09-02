@@ -1,6 +1,11 @@
 spring:
   config:
     import: "optional:file:.env[.properties]"
+  cache:
+    cache-names:
+      - rate-limit-buckets
+    caffeine:
+      spec: maximumSize=100000,expireAfterAccess=3600s
 
   application:
     name: ${APP_NAME}
@@ -13,12 +18,16 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: validate
+      ddl-auto: create
     open-in-view: false
     show-sql: false
     properties:
       hibernate:
         format_sql: true
+
+  redis:
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
 
   flyway:
     enabled: true
@@ -74,3 +83,252 @@ minio:
   use-ssl: ${MINIO_USE_SSL}
   region: ${MINIO_REGION}
 
+bucket4j:
+  enabled: true
+  cache-to-use: jcache
+  filters:
+    - id: global-rate-limit
+      cache-name: rate-limit-buckets
+      filter-method: servlet
+      filter-order: 10
+      url: /.*
+      http-status-code: TOO_MANY_REQUESTS
+      http-content-type: application/json
+      http-response-body: '{"status":429,"message":"Too many requests. Please try again later."}'
+      hide-http-response-headers: false
+      metrics:
+        enabled: true
+        types: CONSUMED_COUNTER,REJECTED_COUNTER
+        tags:
+          - key: IP
+            expression: "@rateLimitKeyResolver.getClientIp(#root)"
+            types: REJECTED_COUNTER
+          - key: URL
+            expression: getRequestURI()
+      rate-limits:
+        - cache-key: "@rateLimitKeyResolver.resolveKey(#root)"
+          bandwidths:
+            - capacity: 500
+              time: 1
+              unit: minutes
+
+app:
+  cache:
+    ttl-minutes: 5
+
+users:
+  super-admin:
+    email: ${SUPER_ADMIN_EMAIL_ADDRESS}
+    password: ${SUPER_ADMIN_PASSWORD}
+
+  admin:
+    email: ${ADMIN_EMAIL_ADDRESS}
+    password: ${ADMIN_PASSWORD}
+
+  head-of-department:
+    email: ${HEAD_OF_DEPARTMENT_EMAIL_ADDRESS}
+    password: ${HEAD_OF_DEPARTMENT_PASSWORD}
+
+  academic-director:
+    email: ${ACADEMIC_DIRECTOR_EMAIL_ADDRESS}
+    password: ${ACADEMIC_DIRECTOR_PASSWORD}
+
+  vice-principal:
+    email: ${VICE_PRINCIPAL_EMAIL_ADDRESS}
+    password: ${VICE_PRINCIPAL_PASSWORD}
+
+  registrar:
+    email: ${REGISTRAR_EMAIL_ADDRESS}
+    password: ${REGISTRAR_PASSWORD}
+
+  bursar:
+    email: ${BURSAR_EMAIL_ADDRESS}
+    password: ${BURSAR_PASSWORD}
+
+  accountant:
+    email: ${ACCOUNTANT_EMAIL_ADDRESS}
+    password: ${ACCOUNTANT_PASSWORD}
+
+  finance-manager:
+    email: ${FINANCE_MANAGER_EMAIL_ADDRESS}
+    password: ${FINANCE_MANAGER_PASSWORD}
+
+  hr-manager:
+    email: ${HR_MANAGER_EMAIL_ADDRESS}
+    password: ${HR_MANAGER_PASSWORD}
+
+  hr-officer:
+    email: ${HR_OFFICER_EMAIL_ADDRESS}
+    password: ${HR_OFFICER_PASSWORD}
+
+  payroll-officer:
+    email: ${PAYROLL_OFFICER_EMAIL_ADDRESS}
+    password: ${PAYROLL_OFFICER_PASSWORD}
+
+  admissions-officer:
+    email: ${ADMISSIONS_OFFICER_EMAIL_ADDRESS}
+    password: ${ADMISSIONS_OFFICER_PASSWORD}
+
+  exam-officer:
+    email: ${EXAM_OFFICER_EMAIL_ADDRESS}
+    password: ${EXAM_OFFICER_PASSWORD}
+
+  librarian:
+    email: ${LIBRARIAN_EMAIL_ADDRESS}
+    password: ${LIBRARIAN_PASSWORD}
+
+  assistant-librarian:
+    email: ${ASSISTANT_LIBRARIAN_EMAIL_ADDRESS}
+    password: ${ASSISTANT_LIBRARIAN_PASSWORD}
+
+  lab-manager:
+    email: ${LAB_MANAGER_EMAIL_ADDRESS}
+    password: ${LAB_MANAGER_PASSWORD}
+
+  lab-technician:
+    email: ${LAB_TECHNICIAN_EMAIL_ADDRESS}
+    password: ${LAB_TECHNICIAN_PASSWORD}
+
+  ict-manager:
+    email: ${ICT_MANAGER_EMAIL_ADDRESS}
+    password: ${ICT_MANAGER_PASSWORD}
+
+  it-support:
+    email: ${IT_SUPPORT_EMAIL_ADDRESS}
+    password: ${IT_SUPPORT_PASSWORD}
+
+  system-admin:
+    email: ${SYSTEM_ADMIN_EMAIL_ADDRESS}
+    password: ${SYSTEM_ADMIN_PASSWORD}
+
+  network-admin:
+    email: ${NETWORK_ADMIN_EMAIL_ADDRESS}
+    password: ${NETWORK_ADMIN_PASSWORD}
+
+  security-officer:
+    email: ${SECURITY_OFFICER_EMAIL_ADDRESS}
+    password: ${SECURITY_OFFICER_PASSWORD}
+
+  procurement-officer:
+    email: ${PROCUREMENT_OFFICER_EMAIL_ADDRESS}
+    password: ${PROCUREMENT_OFFICER_PASSWORD}
+
+  store-keeper:
+    email: ${STORE_KEEPER_EMAIL_ADDRESS}
+    password: ${STORE_KEEPER_PASSWORD}
+
+  hostel-manager:
+    email: ${HOSTEL_MANAGER_EMAIL_ADDRESS}
+    password: ${HOSTEL_MANAGER_PASSWORD}
+
+  hostel-warden:
+    email: ${HOSTEL_WARDEN_EMAIL_ADDRESS}
+    password: ${HOSTEL_WARDEN_PASSWORD}
+
+  transport-manager:
+    email: ${TRANSPORT_MANAGER_EMAIL_ADDRESS}
+    password: ${TRANSPORT_MANAGER_PASSWORD}
+
+  driver:
+    email: ${DRIVER_EMAIL_ADDRESS}
+    password: ${DRIVER_PASSWORD}
+
+  nurse:
+    email: ${NURSE_EMAIL_ADDRESS}
+    password: ${NURSE_PASSWORD}
+
+  school-doctor:
+    email: ${SCHOOL_DOCTOR_EMAIL_ADDRESS}
+    password: ${SCHOOL_DOCTOR_PASSWORD}
+
+  counselor:
+    email: ${COUNSELOR_EMAIL_ADDRESS}
+    password: ${COUNSELOR_PASSWORD}
+
+  receptionist:
+    email: ${RECEPTIONIST_EMAIL_ADDRESS}
+    password: ${RECEPTIONIST_PASSWORD}
+
+  secretary:
+    email: ${SECRETARY_EMAIL_ADDRESS}
+    password: ${SECRETARY_PASSWORD}
+
+  public-relations-officer:
+    email: ${PUBLIC_RELATIONS_OFFICER_EMAIL_ADDRESS}
+    password: ${PUBLIC_RELATIONS_OFFICER_PASSWORD}
+
+  quality-assurance-manager:
+    email: ${QUALITY_ASSURANCE_MANAGER_EMAIL_ADDRESS}
+    password: ${QUALITY_ASSURANCE_MANAGER_PASSWORD}
+
+  quality-assurance-officer:
+    email: ${QUALITY_ASSURANCE_OFFICER_EMAIL_ADDRESS}
+    password: ${QUALITY_ASSURANCE_OFFICER_PASSWORD}
+
+  compliance-officer:
+    email: ${COMPLIANCE_OFFICER_EMAIL_ADDRESS}
+    password: ${COMPLIANCE_OFFICER_PASSWORD}
+
+  legal-officer:
+    email: ${LEGAL_OFFICER_EMAIL_ADDRESS}
+    password: ${LEGAL_OFFICER_PASSWORD}
+
+  marketing-manager:
+    email: ${MARKETING_MANAGER_EMAIL_ADDRESS}
+    password: ${MARKETING_MANAGER_PASSWORD}
+
+  event-coordinator:
+    email: ${EVENT_COORDINATOR_EMAIL_ADDRESS}
+    password: ${EVENT_COORDINATOR_PASSWORD}
+
+  sports-director:
+    email: ${SPORTS_DIRECTOR_EMAIL_ADDRESS}
+    password: ${SPORTS_DIRECTOR_PASSWORD}
+
+  sports-coach:
+    email: ${SPORTS_COACH_EMAIL_ADDRESS}
+    password: ${SPORTS_COACH_PASSWORD}
+
+  dean-of-studies:
+    email: ${DEAN_OF_STUDIES_EMAIL_ADDRESS}
+    password: ${DEAN_OF_STUDIES_PASSWORD}
+
+  discipline-master:
+    email: ${DISCIPLINE_MASTER_EMAIL_ADDRESS}
+    password: ${DISCIPLINE_MASTER_PASSWORD}
+
+  class-coordinator:
+    email: ${CLASS_COORDINATOR_EMAIL_ADDRESS}
+    password: ${CLASS_COORDINATOR_PASSWORD}
+
+  timetable-officer:
+    email: ${TIMETABLE_OFFICER_EMAIL_ADDRESS}
+    password: ${TIMETABLE_OFFICER_PASSWORD}
+
+  student:
+    email: ${STUDENT_EMAIL_ADDRESS}
+    password: ${STUDENT_PASSWORD}
+
+  curriculum-manager:
+    email: ${CURRICULUM_MANAGER_EMAIL_ADDRESS}
+    password: ${CURRICULUM_MANAGER_PASSWORD}
+
+  alumni-coordinator:
+    email: ${ALUMNI_COORDINATOR_EMAIL_ADDRESS}
+    password: ${ALUMNI_COORDINATOR_PASSWORD}
+
+  research-coordinator:
+    email: ${RESEARCH_COORDINATOR_EMAIL_ADDRESS}
+    password: ${RESEARCH_COORDINATOR_PASSWORD}
+
+  training-coordinator:
+    email: ${TRAINING_COORDINATOR_EMAIL_ADDRESS}
+    password: ${TRAINING_COORDINATOR_PASSWORD}
+
+  facilities-manager:
+    email: ${FACILITIES_MANAGER_EMAIL_ADDRESS}
+    password: ${FACILITIES_MANAGER_PASSWORD}
+
+  maintenance-supervisor:
+    email: ${MAINTENANCE_SUPERVISOR_EMAIL_ADDRESS}
+    password: ${MAINTENANCE_SUPERVISOR_PASSWORD}
