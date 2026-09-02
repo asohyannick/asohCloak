@@ -2,12 +2,14 @@ package com.asohCloak.asohCloak.service.keycloakAuthService;
 
 import com.asohCloak.asohCloak.config.securityConfig.keycloakProperties.KeycloakProperties;
 import com.asohCloak.asohCloak.dto.user.KeycloakTokenResponse;
+import com.asohCloak.asohCloak.exception.badRequestException.BadRequestException;
 import com.asohCloak.asohCloak.exception.keycloakAuthenticationException.KeycloakAuthenticationException;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
@@ -15,6 +17,7 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
+import java.net.URI;
 import java.util.List;
 import java.util.Map;
 
@@ -26,6 +29,85 @@ public class KeycloakAuthService {
 
     private final RestClient keycloakRestClient;
     private final KeycloakProperties keycloakProperties;
+
+    /**
+     * Creates the user's identity in Keycloak via the Admin REST API. This is the
+     * canonical account creation step — the local User row is a read-optimized
+     * mirror, not the source of truth.
+     */
+    public String createUser(String email, String firstName, String lastName, String password) {
+        String adminToken = getAdminAccessToken();
+
+        Map<String, Object> credential = Map.of(
+                "type", "password",
+                "value", password,
+                "temporary", false
+        );
+
+        Map<String, Object> userPayload = Map.of(
+                "username", email,
+                "email", email,
+                "firstName", firstName,
+                "lastName", lastName,
+                "enabled", true,
+                "emailVerified", false,
+                "credentials", List.of(credential)
+        );
+
+        String createUri = "/admin/realms/" + keycloakProperties.getRealm() + "/users";
+
+        try {
+            ResponseEntity<Void> response = keycloakRestClient.post()
+                    .uri(createUri)
+                    .header("Authorization", "Bearer " + adminToken)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(userPayload)
+                    .retrieve()
+                    .toBodilessEntity();
+
+            URI location = response.getHeaders().getLocation();
+            if (location == null) {
+                throw new KeycloakAuthenticationException("Keycloak did not return a location for the created user.");
+            }
+            String path = location.getPath();
+            return path.substring(path.lastIndexOf('/') + 1);
+
+        } catch (HttpClientErrorException.Conflict e) {
+            log.warn("Keycloak user creation conflict for {}: {}", email, e.getMessage());
+            throw new BadRequestException("Account with this email already exists.");
+        } catch (RestClientException e) {
+            log.error("Keycloak user creation failed for {}: {}", email, e.getMessage(), e);
+            throw new KeycloakAuthenticationException("Unable to create account at this time.", e);
+        }
+    }
+
+    /**
+     * Best-effort compensating action: deletes a just-created Keycloak user if the
+     * local persistence step afterward fails, to avoid an orphaned identity with
+     * no matching local record. Failures here are logged, not thrown — we don't
+     * want a cleanup failure to mask the original error.
+     */
+    public void deleteUserById(String keycloakUserId) {
+        String adminToken;
+        try {
+            adminToken = getAdminAccessToken();
+        } catch (RuntimeException e) {
+            log.error("Could not obtain admin token to roll back Keycloak user {}: {}", keycloakUserId, e.getMessage(), e);
+            return;
+        }
+
+        String userUri = "/admin/realms/" + keycloakProperties.getRealm() + "/users/" + keycloakUserId;
+        try {
+            keycloakRestClient.delete()
+                    .uri(userUri)
+                    .header("Authorization", "Bearer " + adminToken)
+                    .retrieve()
+                    .toBodilessEntity();
+            log.info("Rolled back orphaned Keycloak user {} after registration failure.", keycloakUserId);
+        } catch (RestClientException e) {
+            log.error("Failed to roll back Keycloak user {} after registration failure: {}", keycloakUserId, e.getMessage(), e);
+        }
+    }
 
     /**
      * Resource Owner Password Credentials (direct access grant) login.

@@ -10,9 +10,11 @@ import com.asohCloak.asohCloak.exception.keycloakAuthenticationException.Keycloa
 import com.asohCloak.asohCloak.exception.notFoundRequestException.NotFoundRequestException;
 import com.asohCloak.asohCloak.mapper.userMappper.UserMapper;
 import com.asohCloak.asohCloak.repository.userRepository.UserRepository;
+import com.asohCloak.asohCloak.service.firebaseAuthService.FirebaseAuthService;
 import com.asohCloak.asohCloak.service.keycloakAuthService.KeycloakAuthService;
 import com.asohCloak.asohCloak.service.resendMailService.ResendMailService;
 import com.asohCloak.asohCloak.utils.specification.userSpecification.UserSpecification;
+import com.google.firebase.auth.FirebaseToken;
 import com.resend.services.emails.model.CreateEmailResponse;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -61,6 +63,7 @@ public class UserService {
     private final ResendMailService resendMailService;
     private final AsyncTaskRunner asyncTaskRunner;
     private final KeycloakAuthService keycloakAuthService;
+    private final FirebaseAuthService firebaseAuthService;
 
     @Value("${app.frontend.reset-password-url}")
     private String frontendResetPasswordUrl;
@@ -141,11 +144,18 @@ public class UserService {
             throw new BadRequestException("Account with this email already exists.");
         }
 
-        User user = userMapper.toEntity(registerRequestDto);
+        String keycloakUserId = keycloakAuthService.createUser(
+                registerRequestDto.email(),
+                registerRequestDto.firstName(),
+                registerRequestDto.lastName(),
+                registerRequestDto.password()
+        );
 
+        User user = userMapper.toEntity(registerRequestDto);
         String otpCode = generateOtp();
 
         user.setPassword(bCryptPasswordEncoder.encode(registerRequestDto.password()));
+        user.setKeycloakId(keycloakUserId);
         user.setRole(UserRole.STUDENT);
         user.setAccountVerified(false);
         user.setOtpCode(otpCode);
@@ -153,7 +163,13 @@ public class UserService {
         user.setOtpExpiryDate(Instant.now().plus(OTP_VALIDITY_MINUTES, ChronoUnit.MINUTES));
         user.setMagicLinkExpiryDate(Instant.now());
 
-        User savedUser = userRepository.save(user);
+        User savedUser;
+        try {
+            savedUser = userRepository.save(user);
+        } catch (RuntimeException ex) {
+            keycloakAuthService.deleteUserById(keycloakUserId);
+            throw ex;
+        }
 
         asyncTaskRunner.runInBackground(
                 () -> {
@@ -170,16 +186,10 @@ public class UserService {
         );
 
         return new UserResponseDto(
-                savedUser.getId(),
-                savedUser.getFirstName(),
-                savedUser.getLastName(),
-                savedUser.getEmail(),
-                savedUser.getRole(),
-                savedUser.isAccountVerified(),
-                savedUser.isAccountLocked(),
-                savedUser.isAccountSuspended(),
-                savedUser.getCreatedAt(),
-                savedUser.getUpdatedAt()
+                savedUser.getId(), savedUser.getFirstName(), savedUser.getLastName(),
+                savedUser.getEmail(), savedUser.getRole(), savedUser.isAccountVerified(),
+                savedUser.isAccountLocked(), savedUser.isAccountSuspended(),
+                savedUser.getCreatedAt(), savedUser.getUpdatedAt()
         );
     }
 
@@ -644,9 +654,82 @@ public class UserService {
         Page<User> userPage = userRepository.findAll(spec, pageable);
         return toPagedResponse(userPage);
     }
+
     public UUID resolveUserIdFromEmail(String email) {
         return userRepository.findByEmail(email)
                 .orElseThrow(() -> new NotFoundRequestException("No account found for the authenticated user."))
                 .getId();
+    }
+
+    public LoginResponseDto loginViaGoogle(VerifyFirebaseIDTokenRequestDto verifyFirebaseIDTokenRequestDto) {
+        FirebaseToken decodedToken = firebaseAuthService.verifyIdToken(verifyFirebaseIDTokenRequestDto.idToken());
+
+        if (decodedToken.getEmail() == null || !decodedToken.isEmailVerified()) {
+            throw new BadRequestException("Google account email is missing or unverified.");
+        }
+        String email = decodedToken.getEmail().toLowerCase();
+
+        User user = userRepository.findByEmail(email).orElse(null);
+
+        if (user == null) {
+            user = provisionGoogleUser(email, decodedToken);
+        } else {
+            if (user.isAccountDeleted()) {
+                throw new BadRequestException("Invalid email or password.");
+            }
+            if (user.isAccountBlocked()) {
+                throw new BadRequestException("Your account has been blocked. Please contact support.");
+            }
+            if (user.isAccountSuspended()) {
+                throw new BadRequestException("Your account has been suspended.");
+            }
+            if (user.isAccountLocked() && user.getLockedUntil() != null && user.getLockedUntil().isAfter(Instant.now())) {
+                throw new BadRequestException("Account is temporarily locked. Please try again later.");
+            }
+            if (!user.isAccountVerified()) {
+                user.setAccountVerified(true);
+                user = userRepository.save(user);
+            }
+        }
+
+        KeycloakTokenResponse tokenResponse = keycloakAuthService.impersonateUser(user.getEmail());
+        return userMapper.toLoginResponseDto(user, tokenResponse.accessToken(), tokenResponse.refreshToken());
+    }
+
+    /**
+     * First-time Google sign-in: no local account exists yet, so create one in both
+     * Keycloak (source of truth) and locally, mirroring register(). A random password
+     * is set in Keycloak purely to satisfy the credential requirement — Google users
+     * always authenticate via token-exchange/impersonation, never the password grant.
+     */
+    private User provisionGoogleUser(String email, FirebaseToken decodedToken) {
+        String firstName = decodedToken.getName();
+        String lastName = "";
+        if (firstName != null && firstName.contains(" ")) {
+            int splitAt = firstName.indexOf(' ');
+            lastName = firstName.substring(splitAt + 1).trim();
+            firstName = firstName.substring(0, splitAt).trim();
+        }
+
+        String randomPassword = generateSecureToken();
+        String keycloakUserId = keycloakAuthService.createUser(email, firstName, lastName, randomPassword);
+
+        User user = new User();
+        user.setEmail(email);
+        user.setFirstName(firstName);
+        user.setLastName(lastName);
+        user.setPassword(bCryptPasswordEncoder.encode(randomPassword));
+        user.setRole(UserRole.STUDENT);
+        user.setAccountVerified(true);
+        user.setOtpCodeVerified(true);
+        user.setKeycloakId(keycloakUserId);
+        user.setMagicLinkExpiryDate(Instant.now());
+
+        try {
+            return userRepository.save(user);
+        } catch (RuntimeException ex) {
+            keycloakAuthService.deleteUserById(keycloakUserId);
+            throw ex;
+        }
     }
 }

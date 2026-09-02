@@ -350,6 +350,7 @@ public class UserController {
             @ApiResponse(responseCode = "400", description = "Incorrect password, or the account is already deleted")
     })
     @DeleteMapping("/me")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<GlobalSuccessResponse<Void>> deleteOwnAccount(
             Authentication authentication,
             @Valid @RequestBody DeleteAccountRequestDto deleteAccountRequestDto) {
@@ -358,6 +359,28 @@ public class UserController {
         return ResponseEntity.ok(new GlobalSuccessResponse<>(
                 "Your account has been deleted successfully.",
                 null,
+                200
+        ));
+    }
+
+    @Operation(
+            summary = "Sign in with Google",
+            description = "Verifies a Firebase ID token obtained from Google Sign-In on the client, then logs the user in. " +
+                    "If no local account exists for the verified email, one is provisioned automatically and treated as pre-verified."
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Login successful",
+                    content = @Content(schema = @Schema(implementation = LoginResponseDto.class))),
+            @ApiResponse(responseCode = "400", description = "Invalid/expired Google token, or the account is blocked, suspended, deleted, or locked")
+    })
+    @PostMapping("/google-login")
+    public ResponseEntity<GlobalSuccessResponse<LoginResponseDto>> loginViaGoogle(
+            @Valid @RequestBody VerifyFirebaseIDTokenRequestDto verifyFirebaseIDTokenRequestDto
+    ) {
+        LoginResponseDto response = userService.loginViaGoogle(verifyFirebaseIDTokenRequestDto);
+        return ResponseEntity.ok(new GlobalSuccessResponse<>(
+                "Signed in with Google successfully.",
+                response,
                 200
         ));
     }

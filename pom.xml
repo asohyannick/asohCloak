@@ -42,6 +42,7 @@
 		<pdfbox.version>3.0.8</pdfbox.version>
 		<okhttp.version>5.4.0</okhttp.version>
 		<keycloak.admin.client.version>26.0.12</keycloak.admin.client.version>
+		<firebase.version>9.10.0</firebase.version>
 	</properties>
 
 	<dependencies>
@@ -60,6 +61,11 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-security</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>com.google.firebase</groupId>
+			<artifactId>firebase-admin</artifactId>
+			<version>${firebase.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

@@ -59,6 +59,8 @@ public class SecurityConfig {
                                 "/users/reset-password",
                                 "/users/verify-otp",
                                 "/users/resend-otp",
+                                "/users/logout",
+                                "users/refreshtoken",
                                 "/users/send-magic-link",
                                 "/users/verify-magic-link",
                                 "/users/google-login"
@@ -72,7 +74,8 @@ public class SecurityConfig {
 
                         .requestMatchers(
                                 "/users/*/block",
-                                "/users/*/unblock"
+                                "/users/*/unblock",
+                                "users/me"
                         ).hasRole("ADMIN")
 
                         .anyRequest().authenticated()

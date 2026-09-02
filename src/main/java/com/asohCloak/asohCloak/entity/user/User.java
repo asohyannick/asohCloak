@@ -27,6 +27,9 @@ public class User {
     @Column(updatable = false, nullable = false)
     private UUID id;
 
+    @Column(name = "keycloak_id", unique = true, updatable = false, length = 36)
+    private String keycloakId;
+
     @Column(name = "first_name", length = 100)
     private String firstName;
 
