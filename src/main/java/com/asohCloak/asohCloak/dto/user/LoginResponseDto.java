@@ -13,6 +13,7 @@ public record LoginResponseDto(
         @Schema(description = "User's last name") String lastName,
         @Schema(description = "User's email address") String email,
         @Schema(description = "Assigned role") UserRole role,
+        @Schema(description = "User's account verified") boolean accountVerified,
         @Schema(description = "Short-lived JWT access token issued by Keycloak") String accessToken,
         @Schema(description = "Refresh token issued by Keycloak, used to obtain a new access token") String refreshToken
 ) { }

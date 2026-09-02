@@ -94,7 +94,7 @@ public class EmailTemplateMessager {
     // =======================================================================
     // 3. OTP VERIFIED SUCCESSFULLY
     // =======================================================================
-    public static String verifyOtpCodeAsync(String firstName, String lastName, String loginUrl) {
+    public static String verifyOtpCodeAsync(String firstName, String lastName) {
         String body = """
             <div style="text-align:center;margin:0 0 24px 0;">
                 <div style="display:inline-block;width:64px;height:64px;line-height:64px;border-radius:50%;background-color:#ECFDF5;color:{{SUCCESS}};font-size:32px;font-weight:700;font-family:Arial,Helvetica,sans-serif;">&#10003;</div>
@@ -110,7 +110,6 @@ public class EmailTemplateMessager {
             </div>
             """
                 .replace("{{FIRST_NAME}}", firstName)
-                .replace("{{CTA_BUTTON}}", ctaButton(loginUrl, "Go to Dashboard", PRIMARY))
                 .replace("{{TEXT_DARK}}", TEXT_DARK)
                 .replace("{{TEXT_MUTED}}", TEXT_MUTED)
                 .replace("{{SUCCESS}}", SUCCESS);
@@ -328,6 +327,47 @@ public class EmailTemplateMessager {
         return wrapEmailShell(
                 "Course created - AsohClock",
                 "Your course \"" + courseName + "\" is now live on AsohClock.",
+                body
+        );
+    }
+
+    // =======================================================================
+    // X. ACCOUNT DELETED (self-service deletion confirmation)
+    // =======================================================================
+    public static String accountDeletedEmailAsync(String firstName, String lastName, String reason) {
+        String reasonParagraph = (reason == null || reason.isBlank())
+                ? ""
+                : """
+              <p style="margin:16px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:{{TEXT_MUTED}};">
+                  Reason provided: <span style="color:{{TEXT_DARK}};">{{REASON}}</span>
+              </p>
+              """
+                .replace("{{REASON}}", reason)
+                .replace("{{TEXT_DARK}}", TEXT_DARK)
+                .replace("{{TEXT_MUTED}}", TEXT_MUTED);
+
+        String body = """
+            <h1 style="margin:0 0 12px 0;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;color:{{TEXT_DARK}};">
+                Your account has been deleted, {{FIRST_NAME}}
+            </h1>
+            <p style="margin:0 0 24px 0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:{{TEXT_MUTED}};">
+                This confirms that your AsohClock account was deleted at your request. You've been signed out everywhere, and any active sessions have been revoked.
+            </p>
+            {{INFO_BOX}}
+            {{REASON_PARAGRAPH}}
+            <p style="margin:24px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.6;color:{{TEXT_MUTED}};">
+                If you didn't request this, please contact support immediately &mdash; someone else may have access to your account.
+            </p>
+            """
+                .replace("{{FIRST_NAME}}", firstName)
+                .replace("{{INFO_BOX}}", infoBox("This action is permanent and cannot be undone from within the app.", DANGER))
+                .replace("{{REASON_PARAGRAPH}}", reasonParagraph)
+                .replace("{{TEXT_DARK}}", TEXT_DARK)
+                .replace("{{TEXT_MUTED}}", TEXT_MUTED);
+
+        return wrapEmailShell(
+                "Your account has been deleted - AsohClock",
+                "Your AsohClock account has been deleted",
                 body
         );
     }

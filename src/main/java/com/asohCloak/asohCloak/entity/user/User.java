@@ -74,6 +74,9 @@ public class User {
     private String forgotPassword;
 
     @Column
+    private Instant forgotPasswordExpiryDate;
+
+    @Column
     private String resetPassword;
 
     @Column(nullable = true)

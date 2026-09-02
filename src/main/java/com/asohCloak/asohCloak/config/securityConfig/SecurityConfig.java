@@ -3,6 +3,7 @@ package com.asohCloak.asohCloak.config.securityConfig;
 import com.asohCloak.asohCloak.config.securityConfig.keycloakRealmRoleConverter.KeycloakRealmRoleConverter;
 import com.asohCloak.asohCloak.config.securityConfig.restAccessDeniedHandler.RestAccessDeniedHandler;
 import com.asohCloak.asohCloak.config.securityConfig.restAuthenticationEntryPoint.RestAuthenticationEntryPoint;
+import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -24,19 +25,12 @@ import org.springframework.web.cors.CorsConfigurationSource;
  */
 @Configuration
 @EnableMethodSecurity
+@RequiredArgsConstructor
 public class SecurityConfig {
 
     private final CorsConfigurationSource corsConfigurationSource;
     private final RestAuthenticationEntryPoint authenticationEntryPoint;
     private final RestAccessDeniedHandler accessDeniedHandler;
-
-    public SecurityConfig(CorsConfigurationSource corsConfigurationSource,
-                          RestAuthenticationEntryPoint authenticationEntryPoint,
-                          RestAccessDeniedHandler accessDeniedHandler) {
-        this.corsConfigurationSource = corsConfigurationSource;
-        this.authenticationEntryPoint = authenticationEntryPoint;
-        this.accessDeniedHandler = accessDeniedHandler;
-    }
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -59,15 +53,15 @@ public class SecurityConfig {
 
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
-                                "/auth/register",
-                                "/auth/login",
-                                "/auth/forgot-password",
-                                "/auth/reset-password",
-                                "/auth/verify-otp",
-                                "/auth/resend-otp",
-                                "/auth/send-magic-link",
-                                "/auth/verify-magic-link",
-                                "/auth/google-login"
+                                "/users/register",
+                                "/users/login",
+                                "/users/forgot-password",
+                                "/users/reset-password",
+                                "/users/verify-otp",
+                                "/users/resend-otp",
+                                "/users/send-magic-link",
+                                "/users/verify-magic-link",
+                                "/users/google-login"
                         ).permitAll()
 
                         .requestMatchers(
