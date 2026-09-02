@@ -12,6 +12,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -47,6 +50,26 @@ public class MinioStorageService {
         }
 
         return objectKey;
+    }
+
+    public void uploadObject(String objectKey, Path filePath, String contentType) throws Exception {
+        try (InputStream inputStream = Files.newInputStream(filePath)) {
+            minioClient.putObject(PutObjectArgs.builder()
+                    .bucket(minioProperties.getBucketName())
+                    .object(objectKey)
+                    .stream(inputStream, Files.size(filePath), -1)
+                    .contentType(contentType != null ? contentType : "application/octet-stream")
+                    .build());
+        }
+    }
+
+    public String generatePresignedGetUrl(String objectKey, Duration expiry) throws Exception {
+        return minioClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
+                .method(Http.Method.GET)
+                .bucket(minioProperties.getBucketName())
+                .object(objectKey)
+                .expiry((int) expiry.toSeconds())
+                .build());
     }
 
     @Transactional

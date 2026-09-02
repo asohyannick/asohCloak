@@ -190,6 +190,76 @@ public class EmailTemplateMessager {
     }
 
     // =======================================================================
+    // 10. COURSE MEDIA READY (background upload finished, all files succeeded)
+    // =======================================================================
+    public static String courseMediaReadyEmailAsync(String firstName, String lastName, String courseName, String courseUrl) {
+        String body = """
+        <div style="text-align:center;margin:0 0 24px 0;">
+            <div style="display:inline-block;width:64px;height:64px;line-height:64px;border-radius:50%;background-color:#ECFDF5;color:{{SUCCESS}};font-size:32px;font-weight:700;font-family:Arial,Helvetica,sans-serif;">&#10003;</div>
+        </div>
+        <h1 style="margin:0 0 12px 0;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;color:{{TEXT_DARK}};text-align:center;">
+            Your course media is ready
+        </h1>
+        <p style="margin:0 0 28px 0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:{{TEXT_MUTED}};text-align:center;">
+            Hi {{FIRST_NAME}}, all videos and documents for <strong style="color:{{TEXT_DARK}};">{{COURSE_NAME}}</strong> have finished uploading and are now live for students.
+        </p>
+        <div style="text-align:center;">
+            {{CTA_BUTTON}}
+        </div>
+        """
+                .replace("{{FIRST_NAME}}", firstName)
+                .replace("{{COURSE_NAME}}", courseName)
+                .replace("{{CTA_BUTTON}}", ctaButton(courseUrl, "View Course", PRIMARY))
+                .replace("{{TEXT_DARK}}", TEXT_DARK)
+                .replace("{{TEXT_MUTED}}", TEXT_MUTED)
+                .replace("{{SUCCESS}}", SUCCESS);
+
+        return wrapEmailShell(
+                "Course media ready - AsohClock",
+                "All media for \"" + courseName + "\" has finished uploading.",
+                body
+        );
+    }
+
+    // =======================================================================
+    // 11. COURSE MEDIA UPLOAD ISSUE (background upload finished, some/all failed)
+    // =======================================================================
+        public static String courseMediaPartiallyFailedEmailAsync(String firstName, String lastName, String courseName,
+                                                                  String courseUrl, java.util.List<String> failedFileNames) {
+            String fileListHtml = failedFileNames.stream()
+                    .map(name -> "<li style=\"margin:0 0 4px 0;\">" + name + "</li>")
+                    .reduce("", String::concat);
+
+            String body = """
+            <h1 style="margin:0 0 12px 0;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;color:{{TEXT_DARK}};">
+                Some course media couldn't be uploaded
+            </h1>
+            <p style="margin:0 0 20px 0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:{{TEXT_MUTED}};">
+                Hi {{FIRST_NAME}}, your course <strong style="color:{{TEXT_DARK}};">{{COURSE_NAME}}</strong> was created successfully, but the following files failed to upload:
+            </p>
+            {{INFO_BOX}}
+            <p style="margin:24px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:{{TEXT_MUTED}};">
+                You can try re-uploading these files from your course dashboard.
+            </p>
+            <div style="text-align:center;margin-top:20px;">
+                {{CTA_BUTTON}}
+            </div>
+            """
+                    .replace("{{FIRST_NAME}}", firstName)
+                    .replace("{{COURSE_NAME}}", courseName)
+                    .replace("{{INFO_BOX}}", infoBox("<ul style=\"margin:0;padding-left:18px;\">" + fileListHtml + "</ul>", WARNING))
+                    .replace("{{CTA_BUTTON}}", ctaButton(courseUrl, "Go to Course", PRIMARY))
+                    .replace("{{TEXT_DARK}}", TEXT_DARK)
+                    .replace("{{TEXT_MUTED}}", TEXT_MUTED);
+
+            return wrapEmailShell(
+                    "Course media upload issue - AsohClock",
+                    "Some files for \"" + courseName + "\" failed to upload.",
+                    body
+            );
+        }
+
+    // =======================================================================
     // 6. ACCOUNT BLOCKED BY ADMIN
     // =======================================================================
     public static String blockAccountEmailAsync(String firstName, String lastName, String reason) {
