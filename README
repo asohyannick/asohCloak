@@ -1,204 +1,231 @@
-# 🛡️ AsohCloak — Authentication & Authorization API
+# 🔐 asohCloak — Identity & Access Framework
 
-> **AsohCloak** is a Spring Boot REST API built to master production-grade **Authentication and Role-Based Authorization** using **Keycloak** as the sole identity provider. School Management features are planned as a second phase on top of this security foundation. 🎓
+### The Keycloak-backed identity, authentication, and authorization layer powering a modern school management system.
 
----
-
-## 📋 Table of Contents
-
-- [🌟 Overview](#-overview)
-- [🏗️ Architecture](#️-architecture)
-- [⚙️ Tech Stack](#️-tech-stack)
-- [🚀 Features](#-features)
-- [👥 User Roles & RBAC](#-user-roles--rbac)
-- [🛠️ Developer Onboarding](#️-developer-onboarding)
-- [🐳 Running with Docker](#-running-with-docker)
-- [🔧 Environment Variables](#-environment-variables)
-- [📁 Project Structure](#-project-structure)
-- [🔐 Authentication & Security](#-authentication--security)
-- [📖 API Documentation](#-api-documentation)
-- [🗄️ Database & Migrations](#️-database--migrations)
-- [🧪 Testing](#-testing)
-- [🗺️ Roadmap](#️-roadmap)
-- [🤝 Contributing](#-contributing)
+![Java](https://img.shields.io/badge/Java-25-blue)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1.1-brightgreen)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-blue)
+![Keycloak](https://img.shields.io/badge/Keycloak-Identity-red)
+![Kafka](https://img.shields.io/badge/Kafka-Event%20Streaming-231F20)
+![Redis](https://img.shields.io/badge/Redis-Caching-DC382D)
+![Flyway](https://img.shields.io/badge/Flyway-Migrations-CC0200)
+![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED)
+![API Docs](https://img.shields.io/badge/API%20Docs-Swagger-85EA2D)
+![License](https://img.shields.io/badge/License-<LICENSE>-lightgrey)
 
 ---
 
-## 🌟 Overview
+## 📖 Table of Contents
 
-AsohCloak is the security backbone for a future School Management platform, built first as a **standalone, deeply-understood auth system**. Every credential, token, and access-control decision is delegated to **Keycloak** — AsohCloak itself never stores a password or manually signs a token. This project doubles as a hands-on reference implementation for combining Spring Boot's OAuth2 Resource Server support with Keycloak's Admin API and custom SPI extensions for flows Keycloak doesn't support out of the box (OTP, magic links).
-
----
-
-## 🏗️ Architecture
-
-```
-┌──────────────┐        REST         ┌────────────────────┐       Admin API        ┌─────────────┐
-│    React     │ ──────────────────▶ │    AsohCloak API    │ ──────────────────────▶│  Keycloak   │
-│   Frontend   │                     │  (Resource Server)  │                        │  (Identity  │
-└──────────────┘                     └──────────┬───────────┘                       │  Provider)  │
-                                                  │                                  └──────┬──────┘
-                                                  │                                         │
-                                       ┌──────────┴──────────┐                     Custom SPI Provider
-                                       │      Data Layer      │                    (OTP + Magic Link)
-                                       ├───────────┬──────────┤
-                                       │PostgreSQL │  MinIO   │
-                                       │(App Data) │(Storage) │
-                                       └───────────┴──────────┘
-```
-
-- **AsohCloak API** — validates every request as an OAuth2 **resource server**, checking JWTs signed by Keycloak. Never issues or stores tokens itself.
-- **Keycloak** — owns registration, login, password resets, blocking/unblocking, and role assignment via its Admin REST API.
-- **Custom Keycloak SPI** (`asohcloak-keycloak-providers`, a separate Maven project deployed into Keycloak's `providers/` directory) — extends Keycloak with email OTP and magic-link authenticators, keeping Keycloak as the single source of truth even for flows it doesn't natively support.
+- [Overview](#-overview)
+- [Architectural Principle](#-architectural-principle)
+- [Tech Stack](#-tech-stack)
+- [Project Structure](#-project-structure)
+- [Core Platform Features](#-core-platform-features)
+- [Getting Started](#-getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+  - [Environment Setup](#environment-setup)
+  - [Run with Docker](#run-with-docker)
+  - [Run Locally](#run-locally)
+  - [Run Migrations](#run-migrations)
+- [API Documentation (Swagger)](#-api-documentation-swagger)
+- [Database & Migrations](#-database--migrations)
+- [Testing](#-testing)
+- [Roadmap](#-roadmap)
+- [Contributing](#-contributing)
+- [License](#-license)
 
 ---
 
-## ⚙️ Tech Stack
+## 🔎 Overview
 
-| Layer | Technology | Version |
+**asohCloak** is the identity and access management backbone for a modern school management platform — covering **course management, admissions, and payments**. It centralizes authentication, authorization, and identity federation for users, internal clients, and third-party API consumers through **Keycloak**.
+
+> **asohCloak is the identity & access layer only.** It authenticates and authorizes — it does not own academic, admissions, or financial records. Those remain the responsibility of their respective domain services. This principle governs every architectural decision in this codebase.
+
+| Domain | Owner | Responsibility |
 |---|---|---|
-| ☕ Runtime | Java | 25 |
-| 🍃 Framework | Spring Boot | 4.1.1 |
-| 🔐 Identity Provider | Keycloak | 26.7.x |
-| 🛡️ Security | Spring Security (OAuth2 Resource Server) | — |
-| 🗄️ Database | PostgreSQL | 18 |
-| 📦 ORM | Spring Data JPA / Hibernate | 7.x |
-| 🧬 Migrations | Flyway | 12.7.0 |
-| ⚡ Cache / Session Store | Redis | *planned — not yet integrated* |
-| 🗺️ Object Mapping | MapStruct | 1.6.3 |
-| ✂️ Boilerplate Reduction | Lombok | 1.18.x |
-| 📧 Transactional Email | Resend API | — |
-| 🪣 Object Storage | MinIO | — |
-| 📖 API Docs | springdoc-openapi (Swagger UI) | 3.1.0 |
-| 🐳 Containerization | Docker (multi-stage build) | — |
-| 🏗️ Build Tool | Maven | — |
+| **Identity & Access** (this backend) | asohCloak | Authentication, authorization, OTP, magic links, Google login, rate limiting, token issuance, RBAC |
+| **Academics** | External / Domain service | Courses, tags, enrollment |
+| **Admissions & Payments** | External / Domain service | Applications, invoicing, receipts |
 
 ---
 
-## 🚀 Features
+## 🏗️ Architectural Principle
 
-### 🔑 Authentication
-- 📝 **Register** — provision a new user through Keycloak
-- 🔓 **Login** — issues short-lived access & refresh tokens, only at login
-- 🚪 **Logout** — revokes the active session
-- 🪄 **Magic Link Login** — passwordless login via emailed one-time link
-- 🔢 **OTP Verification** — verify a one-time passcode for 2FA / passwordless flows
-- 🔁 **Resend OTP / Magic Link** — request a fresh code or link when the previous one expires
+**One Identity Source, One Truth.** There must be no second authentication or authorization ledger inside asohCloak. Keycloak remains the authoritative identity provider at every integration boundary — including error recovery, manual intervention, and performance optimization.
 
-### 🔒 Account Recovery & Lifecycle
-- 🔒 **Forgot Password**
-- ♻️ **Reset Password**
-- ⛔ **Block User** (admin action)
-- ✅ **Unblock User** (admin action)
-
-### 🎭 Authorization
-- Fine-grained **Role-Based Access Control (RBAC)** driven entirely by Keycloak realm roles
-
----
-
-## 👥 User Roles & RBAC
-
-Roles are defined and assigned inside Keycloak's realm, then enforced in AsohCloak via `@PreAuthorize` checks against the roles embedded in each validated JWT. Typical roles include:
-
-| Role | Description |
-|---|---|
-| `ADMIN` | Full administrative access (school officials) |
-| `BURSAR` | Default role for standard users |
-
-*(This table will grow as School Management roles — e.g. `TEACHER`, `STUDENT` — are introduced.)*
-
----
-
-## 🛠️ Developer Onboarding
-
-### Prerequisites
-- ☕ JDK 25
-- 🐳 Docker & Docker Compose
-- 📦 Maven (or the bundled `./mvnw` wrapper)
-- 🔐 A running Keycloak instance with a configured realm
-
-### Setup
-
-```bash
-# 1. Clone the repo
-git clone https://github.com/asohyannick/asohCloak.git
-cd asohCloak
-
-# 2. Configure environment variables
-cp .env.example .env
-# fill in real Postgres, Resend, MinIO, and Keycloak values
-
-# 3. Run the app
-./mvnw spring-boot:run
+```
+Client / Access Layer     → Web Portal, Mobile App, Admin Console (no auth logic)
+API Gateway                → Rate limiting (Bucket4j), request validation
+asohCloak                   → This backend — auth, OTP, magic link, Google login, RBAC
+Downstream Systems           → Keycloak (identity), Course/Admissions/Payments services
 ```
 
 ---
 
-## 🐳 Running with Docker
+## 🛠️ Tech Stack
 
-```bash
-docker build -t asohcloak .
-docker run --env-file .env -p 8080:8080 asohcloak
-```
-
----
-
-## 🔧 Environment Variables
-
-| Variable | Description |
+| Layer | Technology |
 |---|---|
-| `APP_NAME` | Application name used for the Spring context ID |
-| `DATABASE_POSTGRESQL_HOST` | Postgres host |
-| `DATABASE_POSTGRESQL_PORT` | Postgres port |
-| `DATABASE_POSTGRESQL_NAME` | Postgres database name |
-| `DATABASE_POSTGRESQL_USER` | Postgres username |
-| `DATABASE_POSTGRESQL_PASSWORD` | Postgres password |
-| `KEYCLOAK_SERVER_URL` | Base URL of the Keycloak server |
-| `KEYCLOAK_REALM` | Keycloak realm name |
-| `KEYCLOAK_ISSUER_URI` | Issuer URI used for JWT validation |
-| `KEYCLOAK_ADMIN_CLIENT_ID` | Admin API client ID |
-| `KEYCLOAK_ADMIN_CLIENT_SECRET` | Admin API client secret |
-| `RESEND_API_KEY` | Resend transactional email API key |
-| `RESEND_SENDER_EMAIL` / `RESEND_SENDER_NAME` | Sender identity for outgoing email |
-| `MINIO_ENDPOINT`, `MINIO_USERNAME`, `MINIO_PASSWORD`, `MINIO_BUCKET_NAME` | MinIO object storage config |
-| `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed frontend origins |
-
-Full list lives in `.env.example` — copy it to `.env` and fill in real values. **Never commit `.env`.**
+| **Language** | Java 25 |
+| **Framework** | Spring Boot 4.1.1 |
+| **ORM / Database** | PostgreSQL 18 via Hibernate & Spring Data JPA |
+| **Migrations** | Flyway |
+| **Identity / Auth** | Keycloak (OAuth2 Resource Server, JWT) |
+| **Federated Login** | Firebase Admin API (Google Sign-In) |
+| **Object Mapping** | MapStruct |
+| **Boilerplate Reduction** | Lombok |
+| **Event Streaming** | Kafka |
+| **Caching** | Redis |
+| **Rate Limiting** | Bucket4j |
+| **Email Delivery** | Resend |
+| **Document Generation** | Apache PDFBox |
+| **API Docs** | OpenAPI / Swagger |
+| **Containerization** | Docker |
+| **Build Tool** | Maven / Gradle |
 
 ---
 
 ## 📁 Project Structure
 
 ```
-src/main/java/com/asohCloak/asohCloak/
-├── config/           # Security, Keycloak, and general app configuration
-├── controller/        # REST endpoints
-├── dto/                # Request/response payloads
-├── entity/user/        # JPA entities
-├── enums/               # Enum types (e.g. UserRole)
-├── exception/            # Custom exceptions + global handler
-├── mapper/                # MapStruct mappers
-├── repository/             # Spring Data JPA repositories
-└── service/                 # Business logic
+asohCloak/
+├── src/main/java/com/asohCloak/asohCloak/
+│   ├── config/
+│   │   ├── asyncScheduler/            # Scheduled/async job configuration
+│   │   ├── asyncSeederConfig/         # Data seeding on startup
+│   │   ├── cacheManagerConfig/        # Redis cache configuration
+│   │   ├── corsConfig/                # CORS policy
+│   │   ├── emailTemplateMessager/     # Resend email templating
+│   │   ├── firebaseAdminConfig/       # Firebase Admin SDK (Google login)
+│   │   ├── globalSuccessResponse/     # Standardized API response wrapper
+│   │   ├── minioConfig/               # Object storage configuration
+│   │   ├── rateLimitConfig/           # Bucket4j rate limiting
+│   │   ├── resendConfig/              # Resend email provider config
+│   │   ├── securityConfig/
+│   │   │   ├── keycloakConfig/
+│   │   │   ├── keycloakProperties/
+│   │   │   ├── keycloakRealmRoleConverter/
+│   │   │   ├── restAccessDeniedHandler/
+│   │   │   ├── restAuthenticationEntryPoint/
+│   │   │   └── SecurityConfig                # Spring Security filter chain
+│   │   └── swaggerConfig/             # OpenAPI documentation
+│   ├── controller/
+│   │   ├── courseController/
+│   │   └── userController/
+│   ├── dto/
+│   │   ├── course/
+│   │   └── user/
+│   ├── entity/
+│   │   ├── course/
+│   │   └── storeFile/
+│   └── ...
+├── Dockerfile
+├── docker-compose.yml
+└── pom.xml
 ```
 
 ---
 
-## 🔐 Authentication & Security
+## 🧩 Core Platform Features
 
-- Security is delegated **entirely to Keycloak** — no passwords, access tokens, or refresh tokens are minted by this application.
-- AsohCloak acts as an **OAuth2 Resource Server**, validating JWTs against Keycloak's JWKS endpoint on every protected request.
-- Admin-facing actions (register, block, unblock) go through the **Keycloak Admin REST API** via `keycloak-admin-client`.
-- OTP and magic-link flows are implemented as a **custom Keycloak SPI**, kept in a separate project (`asohcloak-keycloak-providers`) since it runs inside the Keycloak server process, not this application.
+- 🔑 **Keycloak-Backed Authentication** — OAuth2 resource server with JWT decoding and realm role conversion
+- 📱 **OTP Verification** — Send, verify, and resend one-time passcodes for step-up authentication
+- 🔗 **Magic Link Login** — Passwordless authentication via secure, expiring links
+- 🌐 **Google Sign-In** — Federated login via Firebase Admin API
+- ♻️ **Token Lifecycle Management** — Refresh tokens, logout, and reset-password flows
+- 🚦 **Rate Limiting** — Bucket4j-backed request throttling per client/user
+- ⚡ **Redis Caching** — Low-latency caching for identity and session data
+- 📡 **Kafka Event Streaming** — Asynchronous domain event propagation
+- 🧾 **PDF Generation** — Apache PDFBox for receipts, admission letters, and reports
+- 🛡️ **Role-Based Access Control** — Fine-grained `hasRole(...)` authorization per endpoint
+- 🧵 **Custom Exception Handling** — Centralized `authenticationEntryPoint` and `accessDeniedHandler`
+- 📘 **OpenAPI Documentation** — Fully documented, explorable Swagger UI
 
 ---
 
-## 📖 API Documentation
+## 🚀 Getting Started
+
+### Prerequisites
+
+- Java 25+
+- Maven (or the bundled wrapper `./mvnw`)
+- Docker & Docker Compose
+- A running Keycloak instance (realm + client configured)
+- PostgreSQL 18+
+- Redis
+- Kafka broker
+- A Firebase project (for Google Sign-In)
+- A Resend API key (for transactional email)
+
+### Installation
+
+```bash
+git clone https://github.com/<ORG>/asohCloak.git
+cd asohCloak
+./mvnw clean install
+```
+
+### Environment Setup
+
+Copy the example environment file and fill in your values:
+
+```bash
+cp .env.example .env
+```
+
+Key variables:
+
+```
+DB_URL=jdbc:postgresql://localhost:5432/asohcloak
+DB_USERNAME=<DB_USER>
+DB_PASSWORD=<DB_PASSWORD>
+
+KEYCLOAK_AUTH_SERVER_URL=http://localhost:8081
+KEYCLOAK_REALM=<REALM_NAME>
+KEYCLOAK_CLIENT_ID=<CLIENT_ID>
+KEYCLOAK_CLIENT_SECRET=<CLIENT_SECRET>
+
+FIREBASE_CREDENTIALS_PATH=<PATH_TO_SERVICE_ACCOUNT_JSON>
+
+RESEND_API_KEY=<RESEND_API_KEY>
+
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+```
+
+### Run with Docker
+
+```bash
+docker-compose up --build
+```
+
+### Run Locally
+
+```bash
+./mvnw spring-boot:run
+```
+
+The API will be available at `http://localhost:8080`.
+
+### Run Migrations
+
+```bash
+./mvnw flyway:migrate
+```
+
+---
+
+## 📘 API Documentation (Swagger)
 
 Once running, interactive Swagger UI is available at:
 
 ```
-http://localhost:8080/api/v1/swagger-ui.html
+http://localhost:8080/swagger-ui.html
 ```
 
 ---
@@ -224,8 +251,13 @@ New endpoints should include integration tests covering both authorized and unau
 - [x] Core Keycloak-backed authentication & RBAC
 - [x] OTP verification flow
 - [x] Magic link passwordless login
-- [ ] Redis integration for OTP / token TTL storage
-- [ ] 🏫 School Management module (students, bursars, academic records)
+- [x] Google Sign-In via Firebase Admin API
+- [x] Bucket4j rate limiting
+- [x] Redis caching integration
+- [ ] Kafka event-driven notifications for admissions & payments
+- [ ] Admission workflow module
+- [ ] Payments & invoicing module
+- [ ] PDF receipt/report generation pipeline
 
 ---
 
@@ -233,13 +265,15 @@ New endpoints should include integration tests covering both authorized and unau
 
 1. **Branch naming** — `feature/<short-description>`, `fix/<short-description>`, or `chore/<short-description>`.
 2. **Before opening a PR** — run `./mvnw clean verify`; add a Flyway migration for any schema change.
-3. **Security-sensitive changes** (auth, tokens, the Keycloak SPI project) should be flagged clearly in the PR description.
+3. **Security-sensitive changes** (auth, tokens, Keycloak configuration) should be flagged clearly in the PR description.
 4. **Code style** — follow the existing package structure; prefer Lombok annotations over manual boilerplate.
 5. **Commit messages** — short, imperative, descriptive (e.g. `Add OTP resend endpoint`).
-6. **Questions?** Open a GitHub Discussion or Issue — especially for anything touching the Keycloak SPI project, which has its own separate build/deploy process.
+6. **Questions?** Open a GitHub Discussion or Issue.
 
 ---
 
 ## 📄 License
 
-Made with ❤️
+<LICENSE_TEXT — e.g. "Proprietary — all rights reserved" or link to LICENSE file>
+
+Made with ❤️ by the asohCloak team️

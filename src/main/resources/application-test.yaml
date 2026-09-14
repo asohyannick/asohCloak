@@ -1,0 +1,22 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${DATABASE_POSTGRESQL_HOST:localhost}:${DATABASE_POSTGRESQL_PORT:5432}/${DATABASE_POSTGRESQL_NAME:asohcloak_test}
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+
+  flyway:
+    enabled: false
+
+logging:
+  level:
+    root: WARN
+    com.asohcloak: INFO
+
+springdoc:
+  swagger-ui:
+    enabled: false
+  api-docs:
+    enabled: false

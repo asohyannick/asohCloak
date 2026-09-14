@@ -1,5 +1,4 @@
 package com.asohCloak.asohCloak.service.courseService;
-
 import com.asohCloak.asohCloak.config.asyncScheduler.asyncTaskRunner.AsyncTaskRunner;
 import com.asohCloak.asohCloak.config.emailTemplateMessager.EmailTemplateMessager;
 import com.asohCloak.asohCloak.dto.course.CourseRequestDto;
@@ -19,6 +18,13 @@ import com.asohCloak.asohCloak.service.resendMailService.ResendMailService;
 import com.asohCloak.asohCloak.utils.specification.courseSpecification.CourseSpecification;
 import com.resend.services.emails.model.CreateEmailResponse;
 import lombok.RequiredArgsConstructor;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.font.PDFont;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -37,11 +43,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayOutputStream;
+import java.io.Closeable;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.*;
+
+import static com.asohCloak.asohCloak.config.pdfDownloadConfig.PDFDownloadConfig.*;
 
 @Service
 @Transactional
@@ -53,6 +63,9 @@ public class CourseService {
     private static final Duration PRESIGNED_URL_TTL = Duration.ofDays(7);
     private static final Duration MEDIA_UPLOAD_TIMEOUT = Duration.ofMinutes(15);
     private static final Duration MEDIA_NOTIFY_DELAY = Duration.ofSeconds(5);
+    private static final PDType1Font FONT_BOLD = new PDType1Font(Standard14Fonts.FontName.HELVETICA_BOLD);
+    private static final PDType1Font FONT_REGULAR = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
+
 
     private final CourseRepository courseRepository;
     private final UserRepository userRepository;
@@ -82,8 +95,6 @@ public class CourseService {
         User instructor = userRepository.findById(courseRequestDto.instructorId())
                 .orElseThrow(() -> new NotFoundRequestException("No instructor found with this id."));
 
-        // Copy multipart content to durable temp files now — the request's own
-        // multipart temp files are gone once this method returns.
         List<StagedFile> stagedVideos = stageFiles(videos);
         List<StagedFile> stagedDocuments = stageFiles(documents);
 
@@ -98,7 +109,6 @@ public class CourseService {
         try {
             savedCourse = courseRepository.save(course);
         } catch (DataIntegrityViolationException e) {
-            // A concurrent request with the same key won the race at the DB level.
             cleanupStagedFiles(stagedVideos, stagedDocuments);
             throw new ConflictRequestException("A course was already created with this idempotency key.");
         }
@@ -106,6 +116,8 @@ public class CourseService {
         String courseUrl = frontendCourseUrl + "/" + savedCourse.getSlug();
 
         sendCourseCreatedEmail(instructor, savedCourse.getName(), courseUrl);
+
+        queueBrochureGeneration(savedCourse.getId());
 
         if (!stagedVideos.isEmpty() || !stagedDocuments.isEmpty()) {
             queueMediaProcessing(savedCourse.getId(), stagedVideos, stagedDocuments,
@@ -211,6 +223,148 @@ public class CourseService {
         return toPagedResponse(coursePage);
     }
 
+    public byte[] generateCourseBrochure(UUID courseId) {
+        Course course = courseRepository.findByIdAndDeletedFalse(courseId)
+                .orElseThrow(() -> new NotFoundRequestException("No course found with this id."));
+
+        try (PDDocument document = new PDDocument();
+             PdfWriter writer = new PdfWriter(document, PAGE_MARGIN)) {
+
+            writer.writeWrapped(course.getName(), FONT_BOLD, TITLE_FONT_SIZE);
+            writer.gap(10);
+
+            writer.writeLine("Level: " + course.getLevel(), FONT_REGULAR, BODY_FONT_SIZE);
+            writer.writeLine("Category: " + nullSafe(course.getCategory()), FONT_REGULAR, BODY_FONT_SIZE);
+            writer.writeLine("Duration: " + course.getDurationInMinutes() + " minutes", FONT_REGULAR, BODY_FONT_SIZE);
+            writer.writeLine("Price: " + course.getPrice() + " " + course.getCurrency(), FONT_REGULAR, BODY_FONT_SIZE);
+
+            if (course.getInstructor() != null) {
+                String instructor = (nullSafe(course.getInstructor().getFirstName()) + " "
+                        + nullSafe(course.getInstructor().getLastName())).trim();
+                if (!instructor.isBlank()) {
+                    writer.writeLine("Instructor: " + instructor, FONT_REGULAR, BODY_FONT_SIZE);
+                }
+            }
+
+            if (course.getTags() != null && !course.getTags().isEmpty()) {
+                writer.writeWrapped("Tags: " + String.join(", ", course.getTags()), FONT_REGULAR, BODY_FONT_SIZE);
+            }
+
+            writer.gap(15);
+            writer.writeLine("Description", FONT_BOLD, HEADING_FONT_SIZE);
+            writer.gap(5);
+
+            String description = nullSafe(course.getDescription());
+            if (!description.isBlank()) {
+                writer.writeWrapped(description, FONT_REGULAR, BODY_FONT_SIZE);
+            }
+
+            writer.close();
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            document.save(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new BadRequestException("Failed to generate PDF for course " + courseId, e);
+        }
+    }
+
+    private String nullSafe(String value) {
+        return value == null ? "" : value;
+    }
+
+    /**
+     * Manages cursor position and auto page-breaks across a PDDocument so
+     * arbitrarily long descriptions don't overflow a single page.
+     */
+    private static final class PdfWriter implements Closeable {
+        private final PDDocument document;
+        private final float margin;
+        private final float pageWidth;
+        private final float pageHeight;
+        private PDPage page;
+        private PDPageContentStream content;
+        private float cursorY;
+        private boolean closed = false;
+
+        PdfWriter(PDDocument document, float margin) throws IOException {
+            this.document = document;
+            this.margin = margin;
+            this.page = new PDPage(PDRectangle.A4);
+            document.addPage(page);
+            this.pageWidth = page.getMediaBox().getWidth();
+            this.pageHeight = page.getMediaBox().getHeight();
+            this.content = new PDPageContentStream(document, page);
+            this.cursorY = pageHeight - margin;
+        }
+
+        float maxWidth() {
+            return pageWidth - 2 * margin;
+        }
+
+        void gap(float amount) {
+            cursorY -= amount;
+        }
+
+        void writeLine(String text, PDFont font, float size) throws IOException {
+            ensureSpace(size * LINE_LEADING);
+            content.beginText();
+            content.setFont(font, size);
+            content.newLineAtOffset(margin, cursorY);
+            content.showText(text);
+            content.endText();
+            cursorY -= size * LINE_LEADING;
+        }
+
+        void writeWrapped(String text, PDFont font, float size) throws IOException {
+            for (String line : wrapText(text, font, size, maxWidth())) {
+                writeLine(line, font, size);
+            }
+        }
+
+        private void ensureSpace(float neededHeight) throws IOException {
+            if (cursorY - neededHeight < margin) {
+                content.close();
+                page = new PDPage(PDRectangle.A4);
+                document.addPage(page);
+                content = new PDPageContentStream(document, page);
+                cursorY = pageHeight - margin;
+            }
+        }
+
+        private List<String> wrapText(String text, PDFont font, float fontSize, float maxWidth) throws IOException {
+            List<String> lines = new ArrayList<>();
+            for (String paragraph : text.split("\n")) {
+                if (paragraph.isBlank()) {
+                    lines.add("");
+                    continue;
+                }
+                StringBuilder currentLine = new StringBuilder();
+                for (String word : paragraph.split(" ")) {
+                    String candidate = currentLine.isEmpty() ? word : currentLine + " " + word;
+                    float width = font.getStringWidth(candidate) / 1000 * fontSize;
+                    if (width > maxWidth && !currentLine.isEmpty()) {
+                        lines.add(currentLine.toString());
+                        currentLine = new StringBuilder(word);
+                    } else {
+                        currentLine = new StringBuilder(candidate);
+                    }
+                }
+                if (!currentLine.isEmpty()) {
+                    lines.add(currentLine.toString());
+                }
+            }
+            return lines;
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (!closed) {
+                content.close();
+                closed = true;
+            }
+        }
+    }
+
     // =====================================================================
     // 7. COUNT — cached
     // =====================================================================
@@ -223,8 +377,14 @@ public class CourseService {
     // MEDIA PROCESSING (background)
     // =====================================================================
 
-    private void queueMediaProcessing(UUID courseId, List<StagedFile> videos, List<StagedFile> documents,
-                                      User instructor, String courseName, String courseUrl) {
+    private void queueMediaProcessing(
+            UUID courseId,
+            List<StagedFile> videos,
+            List<StagedFile> documents,
+            User instructor,
+            String courseName,
+            String courseUrl
+    ) {
         asyncTaskRunner.runInBackground(
                 () -> processMedia(courseId, videos, documents),
                 MEDIA_UPLOAD_TIMEOUT,
@@ -240,7 +400,11 @@ public class CourseService {
         );
     }
 
-    private MediaProcessingResult processMedia(UUID courseId, List<StagedFile> videos, List<StagedFile> documents) {
+    private MediaProcessingResult processMedia(
+            UUID courseId,
+            List<StagedFile> videos,
+            List<StagedFile> documents
+    ) {
         List<String> videoUrls = new ArrayList<>();
         List<String> documentUrls = new ArrayList<>();
         List<String> failedFileNames = new ArrayList<>();
@@ -409,5 +573,62 @@ public class CourseService {
 
     private record StagedFile(Path tempPath, String originalFilename, String contentType) { }
 
-    private record MediaProcessingResult(List<String> videoUrls, List<String> documentUrls, List<String> failedFileNames) { }
+    private record MediaProcessingResult(
+            List<String> videoUrls,
+            List<String> documentUrls,
+            List<String> failedFileNames
+    ) { }
+
+        // =====================================================================
+        // BROCHURE GENERATION (background)
+        // =====================================================================
+
+    private void queueBrochureGeneration(UUID courseId) {
+        asyncTaskRunner.runInBackground(
+                () -> {
+                    try {
+                        return generateAndUploadBrochure(courseId);
+                    } catch (Exception e) {
+                        throw new BadRequestException(e);
+                    }
+                },
+                (String brochureUrl) -> appendBrochureUrl(courseId, brochureUrl),
+                (Throwable ex) -> log.error("Failed to generate brochure for course {}: {}", courseId, ex.getMessage(), ex)
+        );
+    }
+
+    private String generateAndUploadBrochure(UUID courseId) throws Exception {
+        byte[] pdfBytes = generateCourseBrochure(courseId);
+        Path tempFile;
+        try {
+            tempFile = Files.createTempFile("course-brochure-", ".pdf");
+            Files.write(tempFile, pdfBytes);
+        } catch (IOException e) {
+            throw new BadRequestException("Failed to stage brochure PDF for course " + courseId, e);
+        }
+
+        try {
+            String objectKey = "courses/%s/brochure/%s.pdf".formatted(courseId, UUID.randomUUID());
+            minioStorageService.uploadObject(objectKey, tempFile, "application/pdf");
+            return minioStorageService.generatePresignedGetUrl(objectKey, PRESIGNED_URL_TTL);
+        } finally {
+            deleteQuietly(tempFile);
+        }
+    }
+
+    /**
+     * Called from the background callback (self-invocation), so @CacheEvict on
+     * this method would silently do nothing — the Spring AOP proxy is bypassed
+     * on internal calls. Evicting via CacheManager directly works regardless.
+     */
+    private void appendBrochureUrl(UUID courseId, String brochureUrl) {
+        courseRepository.findById(courseId).ifPresent(course -> {
+            course.setBrochureUrl(brochureUrl);
+            courseRepository.save(course);
+        });
+
+        evictIfPresent("course", courseId);
+        clearIfPresent("courses");
+        clearIfPresent("courseSearch");
+    }
 }

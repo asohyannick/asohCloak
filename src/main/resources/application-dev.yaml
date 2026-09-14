@@ -1,0 +1,21 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+logging:
+  level:
+    root: INFO
+    com.asohcloak: DEBUG
+    org.hibernate.SQL: DEBUG
+
+springdoc:
+  swagger-ui:
+    enabled: true
+  api-docs:
+    enabled: true

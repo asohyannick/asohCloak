@@ -1,0 +1,27 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: false
+
+logging:
+  level:
+    root: WARN
+    com.asohcloak: INFO
+    org.springframework.security: WARN
+
+springdoc:
+  swagger-ui:
+    enabled: false
+  api-docs:
+    enabled: false
+
+server:
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never

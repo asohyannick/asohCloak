@@ -9,6 +9,7 @@ import com.asohCloak.asohCloak.service.courseService.CourseService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -83,5 +84,16 @@ public class CourseController {
     @GetMapping("/count")
     public ResponseEntity<GlobalSuccessResponse<Long>> countCourses() {
         return ResponseEntity.ok(new GlobalSuccessResponse<>("Course count fetched successfully.", courseService.countCourses(), 200));
+    }
+
+    @GetMapping("/{courseId}/download")
+    public ResponseEntity<byte[]> downloadCourseBrochure(
+            @PathVariable UUID courseId
+    ) {
+        byte[] pdf = courseService.generateCourseBrochure(courseId);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"course-" + courseId + ".pdf\"")
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(pdf);
     }
 }

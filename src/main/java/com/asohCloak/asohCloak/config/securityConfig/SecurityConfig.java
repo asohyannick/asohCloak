@@ -6,6 +6,7 @@ import com.asohCloak.asohCloak.config.securityConfig.restAuthenticationEntryPoin
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -60,7 +61,7 @@ public class SecurityConfig {
                                 "/users/verify-otp",
                                 "/users/resend-otp",
                                 "/users/logout",
-                                "users/refreshtoken",
+                                "/users/refreshtoken",
                                 "/users/send-magic-link",
                                 "/users/verify-magic-link",
                                 "/users/google-login"
@@ -73,10 +74,20 @@ public class SecurityConfig {
                         ).permitAll()
 
                         .requestMatchers(
+                                "/courses",
+                                "/users/all",
+                                "/users/search"
+                        ).hasRole("ADMIN")
+
+                        .requestMatchers(
                                 "/users/*/block",
                                 "/users/*/unblock",
-                                "users/me"
+                                "/users/me"
                         ).hasRole("ADMIN")
+
+                        .requestMatchers(HttpMethod.DELETE, "/users/me").hasRole("ADMIN")
+
+                        .requestMatchers(HttpMethod.GET, "/users/{id}").hasRole("ADMIN")
 
                         .anyRequest().authenticated()
                 )

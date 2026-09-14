@@ -87,6 +87,9 @@ public class Course {
     private boolean published = false;
 
     @Column
+    private String brochureUrl;
+
+    @Column
     private Instant publishedAt;
 
     @CreationTimestamp
