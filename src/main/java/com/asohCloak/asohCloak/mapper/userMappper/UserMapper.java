@@ -21,5 +21,16 @@ public interface UserMapper {
     @Mapping(target = "role", ignore = true)
     User toEntity(RegisterRequestDto dto);
 
-    LoginResponseDto toLoginResponseDto(User user, String accessToken, String refreshToken);
+    default LoginResponseDto toLoginResponseDto(User user, String accessToken, String refreshToken) {
+        return new LoginResponseDto(
+                user.getId(),
+                user.getFirstName(),
+                user.getLastName(),
+                user.getEmail(),
+                user.getRole(),
+                user.isAccountVerified(),
+                accessToken,
+                refreshToken
+        );
+    }
 }

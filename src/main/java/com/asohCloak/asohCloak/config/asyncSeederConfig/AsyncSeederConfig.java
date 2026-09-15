@@ -3,9 +3,12 @@ package com.asohCloak.asohCloak.config.asyncSeederConfig;
 import com.asohCloak.asohCloak.config.asyncSeederConfig.userSeedCredential.UserSeedCredential;
 import com.asohCloak.asohCloak.entity.user.User;
 import com.asohCloak.asohCloak.enums.UserRole;
+import com.asohCloak.asohCloak.exception.badRequestException.BadRequestException;
 import com.asohCloak.asohCloak.repository.userRepository.UserRepository;
+import com.asohCloak.asohCloak.service.keycloakAuthService.KeycloakAuthService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.jspecify.annotations.NonNull;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.annotation.Order;
@@ -13,6 +16,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -39,9 +44,18 @@ public class AsyncSeederConfig implements ApplicationRunner {
     private final Map<String, UserSeedCredential> userSeedCredentials;
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final KeycloakAuthService keycloakAuthService;
 
     @Override
-    public void run(ApplicationArguments args) {
+    public void run(@NonNull ApplicationArguments args) {
+        List<String> roleNames = Arrays.stream(UserRole.values())
+                .map(Enum::name)
+                .toList();
+
+        log.info("Ensuring {} realm role(s) exist in Keycloak.", roleNames.size());
+        keycloakAuthService.ensureRealmRolesExist(roleNames);
+        log.info("Realm role provisioning complete.");
+
         log.info("User seeding started: {} role(s) configured.", userSeedCredentials.size());
 
         int seeded = 0;
@@ -72,7 +86,27 @@ public class AsyncSeederConfig implements ApplicationRunner {
                 continue;
             }
 
+            String keycloakUserId;
+            try {
+                keycloakUserId = keycloakAuthService.createUser(
+                        email, deriveFirstName(roleKey),
+                        deriveLastName(roleKey),
+                        credential.getPassword(),
+                        role.name()
+                );
+            } catch (BadRequestException ex) {
+                try {
+                    keycloakUserId = keycloakAuthService.findExistingUserId(email);
+                    log.warn("Keycloak identity for {} already existed; linking to local record instead of creating.", email);
+                } catch (RuntimeException lookupEx) {
+                    log.error("Keycloak user {} exists but could not be looked up: {}", email, lookupEx.getMessage(), lookupEx);
+                    skippedInvalid++;
+                    continue;
+                }
+            }
+
             User user = buildUser(roleKey, role, email, credential.getPassword());
+            user.setKeycloakId(keycloakUserId);
             userRepository.save(user);
             seeded++;
             log.info("Seeded default user [{}] with role {}.", email, role);

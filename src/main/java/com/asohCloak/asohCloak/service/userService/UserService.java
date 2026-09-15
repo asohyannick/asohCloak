@@ -148,7 +148,8 @@ public class UserService {
                 registerRequestDto.email(),
                 registerRequestDto.firstName(),
                 registerRequestDto.lastName(),
-                registerRequestDto.password()
+                registerRequestDto.password(),
+                UserRole.STUDENT.name()
         );
 
         User user = userMapper.toEntity(registerRequestDto);
@@ -165,7 +166,7 @@ public class UserService {
 
         User savedUser;
         try {
-            savedUser = userRepository.save(user);
+            savedUser = userRepository.saveAndFlush(user);
         } catch (RuntimeException ex) {
             keycloakAuthService.deleteUserById(keycloakUserId);
             throw ex;
@@ -320,13 +321,13 @@ public class UserService {
                 user.setAccountBlocked(true);
                 user.setLockedUntil(Instant.now().plus(ACCOUNT_LOCK_MINUTES, ChronoUnit.MINUTES));
             }
-            userRepository.save(user);
+            userRepository.saveAndFlush(user);
             throw new BadRequestException("Invalid email or password.");
         }
 
         if (user.getFailedLoginAttempts() != 0) {
             user.setFailedLoginAttempts(0);
-            userRepository.save(user);
+            userRepository.saveAndFlush(user);
         }
 
         return userMapper.toLoginResponseDto(user, tokenResponse.accessToken(), tokenResponse.refreshToken());
@@ -712,7 +713,13 @@ public class UserService {
         }
 
         String randomPassword = generateSecureToken();
-        String keycloakUserId = keycloakAuthService.createUser(email, firstName, lastName, randomPassword);
+        String keycloakUserId = keycloakAuthService.createUser(
+                email,
+                firstName,
+                lastName,
+                randomPassword,
+                UserRole.STUDENT.name()
+        );
 
         User user = new User();
         user.setEmail(email);

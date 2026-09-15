@@ -36,7 +36,7 @@ public class User {
     @Column(name = "last_name", length = 100)
     private String lastName;
 
-    @Column(nullable = false, unique = true, length = 150)
+    @Column(nullable = false, unique = true, length = 255)
     private String email;
 
     @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
@@ -91,7 +91,7 @@ public class User {
     @Column(nullable = true)
     private String verifyMagicLinkToken;
 
-    @Column(nullable = false)
+    @Column(name = "magic_link_expiry_date", nullable = true)
     private Instant magicLinkExpiryDate;
 
     @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)

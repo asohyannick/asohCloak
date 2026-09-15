@@ -1,7 +1,5 @@
 package com.asohCloak.asohCloak.dto.user;
-
 import com.asohCloak.asohCloak.enums.UserRole;
-
 import java.time.Instant;
 import java.util.UUID;
 

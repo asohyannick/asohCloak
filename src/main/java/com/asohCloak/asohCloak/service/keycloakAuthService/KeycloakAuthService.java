@@ -35,7 +35,13 @@ public class KeycloakAuthService {
      * canonical account creation step — the local User row is a read-optimized
      * mirror, not the source of truth.
      */
-    public String createUser(String email, String firstName, String lastName, String password) {
+    public String createUser(
+            String email,
+            String firstName,
+            String lastName,
+            String password,
+            String roleName
+    ) {
         String adminToken = getAdminAccessToken();
 
         Map<String, Object> credential = Map.of(
@@ -70,7 +76,12 @@ public class KeycloakAuthService {
                 throw new KeycloakAuthenticationException("Keycloak did not return a location for the created user.");
             }
             String path = location.getPath();
-            return path.substring(path.lastIndexOf('/') + 1);
+
+            String keycloakUserId = path.substring(path.lastIndexOf('/') + 1);
+
+            assignRealmRole(keycloakUserId, roleName, adminToken);
+
+            return keycloakUserId;
 
         } catch (HttpClientErrorException.Conflict e) {
             log.warn("Keycloak user creation conflict for {}: {}", email, e.getMessage());
@@ -259,6 +270,16 @@ public class KeycloakAuthService {
     }
 
     /**
+     * Looks up an existing Keycloak user's ID by email. Used by the seeder to
+     * recover when local persistence lags behind an already-provisioned
+     * Keycloak identity (e.g. local DB was reset but Keycloak wasn't).
+     */
+    public String findExistingUserId(String email) {
+        String adminToken = getAdminAccessToken();
+        return findUserIdByEmail(email, adminToken);
+    }
+
+    /**
      * Exchanges a valid, unexpired refresh token for a new access/refresh token pair.
      * Relies on Keycloak's own refresh-token grant validation for expiry/revocation checks.
      * Old-token invalidation on rotation is enforced by the "Revoke Refresh Token" setting
@@ -377,6 +398,76 @@ public class KeycloakAuthService {
         } catch (RestClientException e) {
             log.error("Keycloak user lookup failed for {}: {}", email, e.getMessage(), e);
             throw new KeycloakAuthenticationException("Unable to reach authentication server.", e);
+        }
+    }
+
+    private void assignRealmRole(String keycloakUserId, String roleName, String adminToken) {
+        Map<String, Object> roleRepresentation;
+        try {
+            roleRepresentation = keycloakRestClient.get()
+                    .uri("/admin/realms/" + keycloakProperties.getRealm() + "/roles/" + roleName)
+                    .header("Authorization", "Bearer " + adminToken)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+        } catch (RestClientException e) {
+            log.error("Realm role '{}' not found in Keycloak; cannot assign to user {}.", roleName, keycloakUserId, e);
+            throw new KeycloakAuthenticationException("Configured role does not exist in Keycloak: " + roleName, e);
+        }
+
+        try {
+            keycloakRestClient.post()
+                    .uri("/admin/realms/" + keycloakProperties.getRealm() + "/users/" + keycloakUserId + "/role-mappings/realm")
+                    .header("Authorization", "Bearer " + adminToken)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(List.of(roleRepresentation))
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (RestClientException e) {
+            log.error("Failed to assign role '{}' to Keycloak user {}: {}", roleName, keycloakUserId, e.getMessage(), e);
+            throw new KeycloakAuthenticationException("Unable to assign role to user.", e);
+        }
+    }
+
+    /**
+     * Ensures each given realm role name exists in Keycloak, creating any
+     * that are missing. Idempotent — existing roles are left untouched.
+     */
+    public void ensureRealmRolesExist(List<String> roleNames) {
+        String adminToken = getAdminAccessToken();
+        String rolesUri = "/admin/realms/" + keycloakProperties.getRealm() + "/roles";
+
+        for (String roleName : roleNames) {
+            try {
+                keycloakRestClient.get()
+                        .uri(rolesUri + "/" + roleName)
+                        .header("Authorization", "Bearer " + adminToken)
+                        .retrieve()
+                        .toBodilessEntity();
+            } catch (HttpClientErrorException.NotFound e) {
+                createRealmRole(roleName, adminToken, rolesUri);
+            } catch (RestClientException e) {
+                log.error("Failed to check realm role '{}' in Keycloak: {}", roleName, e.getMessage(), e);
+            }
+        }
+    }
+
+    private void createRealmRole(String roleName, String adminToken, String rolesUri) {
+        Map<String, Object> rolePayload = Map.of(
+                "name", roleName,
+                "description", "Auto-provisioned role for " + roleName
+        );
+        try {
+            keycloakRestClient.post()
+                    .uri(rolesUri)
+                    .header("Authorization", "Bearer " + adminToken)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(rolePayload)
+                    .retrieve()
+                    .toBodilessEntity();
+            log.info("Created missing realm role '{}' in Keycloak.", roleName);
+        } catch (HttpClientErrorException.Conflict _) {
+        } catch (RestClientException e) {
+            log.error("Failed to create realm role '{}' in Keycloak: {}", roleName, e.getMessage(), e);
         }
     }
 }

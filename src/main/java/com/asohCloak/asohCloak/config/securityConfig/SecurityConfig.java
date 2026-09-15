@@ -64,7 +64,8 @@ public class SecurityConfig {
                                 "/users/refreshtoken",
                                 "/users/send-magic-link",
                                 "/users/verify-magic-link",
-                                "/users/google-login"
+                                "/users/google-login",
+                                "/error"
                         ).permitAll()
 
                         .requestMatchers(
@@ -77,13 +78,13 @@ public class SecurityConfig {
                                 "/courses",
                                 "/users/all",
                                 "/users/search"
-                        ).hasRole("ADMIN")
+                        ).hasRole("Admin")
 
                         .requestMatchers(
                                 "/users/*/block",
                                 "/users/*/unblock",
                                 "/users/me"
-                        ).hasRole("ADMIN")
+                        ).hasRole("Admin")
 
                         .requestMatchers(HttpMethod.DELETE, "/users/me").hasRole("ADMIN")
 

@@ -79,7 +79,8 @@ public class UserController {
             @ApiResponse(responseCode = "400", description = "No account found with this email, or the account is already verified")
     })
     @PostMapping("/resend-otp")
-    public ResponseEntity<GlobalSuccessResponse<UserResponseDto>> resendOTPVerificationCode(@Valid @RequestBody ResendOTPCodeRequestDto resendOTPCodeRequestDto) {
+    public ResponseEntity<GlobalSuccessResponse<UserResponseDto>> resendOTPVerificationCode(
+            @Valid @RequestBody ResendOTPCodeRequestDto resendOTPCodeRequestDto) {
         UserResponseDto response = userService.resendOTPVerificationCode(resendOTPCodeRequestDto);
         return ResponseEntity.ok(new GlobalSuccessResponse<>(
                 "OTP verification code has been sent successfully to your email. Please, check your email",
@@ -99,7 +100,8 @@ public class UserController {
             @ApiResponse(responseCode = "400", description = "Invalid credentials, unverified email, or a blocked/suspended/locked account")
     })
     @PostMapping("/login")
-    public ResponseEntity<GlobalSuccessResponse<LoginResponseDto>> login(@Valid @RequestBody LoginRequestDto loginRequestDto) {
+    public ResponseEntity<GlobalSuccessResponse<LoginResponseDto>> login(
+            @Valid @RequestBody LoginRequestDto loginRequestDto) {
         LoginResponseDto response = userService.login(loginRequestDto);
         return ResponseEntity.ok(new GlobalSuccessResponse<>(
                 "Login successful",
@@ -140,7 +142,7 @@ public class UserController {
             @ApiResponse(responseCode = "200", description = "Logged out successfully")
     })
     @PostMapping("/logout")
-    public ResponseEntity<GlobalSuccessResponse<Void>> logout(@Valid @RequestParam LogoutRequestDto logoutRequestDto) {
+    public ResponseEntity<GlobalSuccessResponse<Void>> logout(@Valid @RequestBody LogoutRequestDto logoutRequestDto) {
         userService.logout(logoutRequestDto);
         return ResponseEntity.ok(new GlobalSuccessResponse<>(
                 "Logged out successfully.",
@@ -264,7 +266,7 @@ public class UserController {
     })
     @PostMapping("/verify-magic-link")
     public ResponseEntity<GlobalSuccessResponse<LoginResponseDto>> loginViaMagicLinkToken(
-            @Valid @RequestBody VerifyMagicLinkTokenRequestDto verifyMagicLinkTokenRequestDto) {
+            @Valid @ModelAttribute VerifyMagicLinkTokenRequestDto verifyMagicLinkTokenRequestDto) {
         LoginResponseDto response = userService.loginViaMagicLinkToken(verifyMagicLinkTokenRequestDto);
         return ResponseEntity.ok(new GlobalSuccessResponse<>(
                 "Login successful",

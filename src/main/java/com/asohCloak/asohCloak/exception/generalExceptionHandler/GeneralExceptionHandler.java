@@ -1,5 +1,6 @@
 package com.asohCloak.asohCloak.exception.generalExceptionHandler;
 
+import com.asohCloak.asohCloak.exception.badRequestException.BadRequestException;
 import com.asohCloak.asohCloak.exception.conflictRequestException.ConflictRequestException;
 import com.asohCloak.asohCloak.exception.forbiddenRequestException.ForbiddenRequestException;
 import com.asohCloak.asohCloak.exception.globalExceptionResponseHandler.GlobalExceptionResponseHandler;
@@ -25,16 +26,15 @@ public class GeneralExceptionHandler {
             HttpStatus status,
             HttpServletRequest request
     ) {
-
         GlobalExceptionResponseHandler response =
                 new GlobalExceptionResponseHandler(
                         Instant.now(),
                         message,
                         details,
-                        statusCode,
-                        status.value(),
-                        errorCode,
                         request.getRequestURI(),
+                        status.value(),
+                        statusCode,
+                        errorCode,
                         request.getMethod()
                 );
 
@@ -119,6 +119,21 @@ public class GeneralExceptionHandler {
                 HttpStatus.CONFLICT.getReasonPhrase(),
                 "CONFLICT",
                 HttpStatus.CONFLICT,
+                request
+        );
+    }
+
+    @ExceptionHandler(BadRequestException.class)
+    public ResponseEntity<GlobalExceptionResponseHandler> handleBadRequestException(
+            BadRequestException ex,
+            HttpServletRequest request
+    ) {
+        return buildResponse(
+                ex.getMessage(),
+                "Invalid request",
+                HttpStatus.BAD_REQUEST.getReasonPhrase(),
+                "BAD_REQUEST",
+                HttpStatus.BAD_REQUEST,
                 request
         );
     }

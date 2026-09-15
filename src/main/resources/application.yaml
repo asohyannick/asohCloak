@@ -22,7 +22,7 @@ spring:
     open-in-view: false
     properties:
       hibernate:
-        format_sql: true
+        format_sql: false
 
   redis:
     host: ${REDIS_HOST:localhost}
