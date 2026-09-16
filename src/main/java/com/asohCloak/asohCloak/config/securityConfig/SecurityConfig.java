@@ -78,17 +78,17 @@ public class SecurityConfig {
                                 "/courses",
                                 "/users/all",
                                 "/users/search"
-                        ).hasRole("Admin")
+                        ).hasRole("ADMIN")
 
                         .requestMatchers(
                                 "/users/*/block",
                                 "/users/*/unblock",
                                 "/users/me"
-                        ).hasRole("Admin")
-
-                        .requestMatchers(HttpMethod.DELETE, "/users/me").hasRole("ADMIN")
+                        ).hasRole("ADMIN")
 
                         .requestMatchers(HttpMethod.GET, "/users/{id}").hasRole("ADMIN")
+
+                        .requestMatchers(HttpMethod.DELETE, "/users/{id}").authenticated()
 
                         .anyRequest().authenticated()
                 )

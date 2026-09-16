@@ -505,13 +505,7 @@ public class CourseService {
     }
 
     private PagedResponseDto<CourseResponseDto> toPagedResponse(Page<Course> coursePage) {
-        List<CourseResponseDto> content = coursePage.getContent().stream()
-                .map(courseMapper::toResponseDto)
-                .toList();
-        return new PagedResponseDto<>(
-                content, coursePage.getNumber(), coursePage.getSize(),
-                coursePage.getTotalElements(), coursePage.getTotalPages(), coursePage.isLast()
-        );
+        return PagedResponseDto.from(coursePage, courseMapper::toResponseDto);
     }
 
     private String buildSlug(String name) {

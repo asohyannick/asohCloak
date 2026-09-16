@@ -12,6 +12,7 @@ public record UserResponseDto(
     boolean accountVerified,
     boolean accountLocked,
     boolean accountSuspended,
+    boolean accountBlocked,
     Instant createdAt,
     Instant updatedAt
 ) {}

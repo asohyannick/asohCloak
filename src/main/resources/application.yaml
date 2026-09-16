@@ -24,9 +24,12 @@ spring:
       hibernate:
         format_sql: false
 
-  redis:
-    host: ${REDIS_HOST:localhost}
-    port: ${REDIS_PORT:6379}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
+      timeout: 5s
 
   flyway:
     locations: classpath:db/migration

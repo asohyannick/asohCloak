@@ -2,11 +2,15 @@ package com.asohCloak.asohCloak.config.cacheManagerConfig.twoLevelCache;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import org.springframework.cache.support.SimpleValueWrapper;
+import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Callable;
 
 public class TwoLevelCache implements org.springframework.cache.Cache {
@@ -61,9 +65,12 @@ public class TwoLevelCache implements org.springframework.cache.Cache {
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public <T> T get(@NonNull Object key, @Nullable Class<T> type) {
         ValueWrapper wrapper = get(key);
-        return wrapper == null ? null : type.cast(wrapper.get());
+        if (wrapper == null) return null;
+        Object value = wrapper.get();
+        return type == null ? (T) value : type.cast(value);
     }
 
     @Override
@@ -82,6 +89,24 @@ public class TwoLevelCache implements org.springframework.cache.Cache {
     @Override
     public void clear() {
         localCache.invalidateAll();
-        redisTemplate.keys(name + "::*").forEach(redisTemplate::delete);
+
+        ScanOptions options = ScanOptions.scanOptions()
+                .match(name + "::*")
+                .count(500)
+                .build();
+
+        List<String> batch = new ArrayList<>();
+        try (Cursor<String> cursor = redisTemplate.scan(options)) {
+            while (cursor.hasNext()) {
+                batch.add(cursor.next());
+                if (batch.size() >= 500) {
+                    redisTemplate.delete(batch);
+                    batch.clear();
+                }
+            }
+        }
+        if (!batch.isEmpty()) {
+            redisTemplate.delete(batch);
+        }
     }
 }

@@ -3,7 +3,6 @@ package com.asohCloak.asohCloak.config.asyncSeederConfig;
 import com.asohCloak.asohCloak.config.asyncSeederConfig.userSeedCredential.UserSeedCredential;
 import com.asohCloak.asohCloak.entity.user.User;
 import com.asohCloak.asohCloak.enums.UserRole;
-import com.asohCloak.asohCloak.exception.badRequestException.BadRequestException;
 import com.asohCloak.asohCloak.repository.userRepository.UserRepository;
 import com.asohCloak.asohCloak.service.keycloakAuthService.KeycloakAuthService;
 import lombok.RequiredArgsConstructor;
@@ -20,21 +19,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Seeds one default {@link User} per role declared under `users.*` in
- * application.yaml, hashing each raw password before persisting.
- *
- * Runs once via {@link ApplicationRunner}, right after the context is fully
- * initialized. It is idempotent by email: on every subsequent application
- * restart, roles whose email already exists in the database are skipped, so
- * duplicate accounts are never created and passwords are never re-hashed
- * or overwritten on restart.
- *
- * Role resolution: each YAML key (e.g. "quality-assurance-manager") is
- * converted to SCREAMING_SNAKE_CASE ("QUALITY_ASSURANCE_MANAGER") and
- * resolved against {@link UserRole}. This works because every key in the
- * `users` block was named to match its UserRole constant exactly.
- */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -58,9 +42,10 @@ public class AsyncSeederConfig implements ApplicationRunner {
 
         log.info("User seeding started: {} role(s) configured.", userSeedCredentials.size());
 
-        int seeded = 0;
-        int alreadyExisted = 0;
+        int created = 0;
+        int reconciled = 0;
         int skippedInvalid = 0;
+        int failed = 0;
 
         for (Map.Entry<String, UserSeedCredential> entry : userSeedCredentials.entrySet()) {
             String roleKey = entry.getKey();
@@ -81,41 +66,63 @@ public class AsyncSeederConfig implements ApplicationRunner {
 
             String email = credential.getEmail().trim().toLowerCase();
 
-            if (userRepository.existsByEmail(email)) {
-                alreadyExisted++;
-                continue;
-            }
-
-            String keycloakUserId;
             try {
-                keycloakUserId = keycloakAuthService.createUser(
-                        email, deriveFirstName(roleKey),
-                        deriveLastName(roleKey),
-                        credential.getPassword(),
-                        role.name()
-                );
-            } catch (BadRequestException ex) {
-                try {
-                    keycloakUserId = keycloakAuthService.findExistingUserId(email);
-                    log.warn("Keycloak identity for {} already existed; linking to local record instead of creating.", email);
-                } catch (RuntimeException lookupEx) {
-                    log.error("Keycloak user {} exists but could not be looked up: {}", email, lookupEx.getMessage(), lookupEx);
-                    skippedInvalid++;
-                    continue;
+                boolean wasCreated = seedOrReconcile(roleKey, role, email, credential.getPassword());
+                if (wasCreated) {
+                    created++;
+                } else {
+                    reconciled++;
                 }
+            } catch (RuntimeException ex) {
+                log.error("Failed to seed/reconcile {} ({}): {}", email, role, ex.getMessage(), ex);
+                failed++;
             }
-
-            User user = buildUser(roleKey, role, email, credential.getPassword());
-            user.setKeycloakId(keycloakUserId);
-            userRepository.save(user);
-            seeded++;
-            log.info("Seeded default user [{}] with role {}.", email, role);
         }
 
         log.info(
-                "User seeding complete. seeded={}, alreadyExisted={}, skippedInvalid={}",
-                seeded, alreadyExisted, skippedInvalid
+                "User seeding complete. created={}, reconciled={}, skippedInvalid={}, failed={}",
+                created, reconciled, skippedInvalid, failed
         );
+    }
+
+    private boolean seedOrReconcile(String roleKey, UserRole role, String email, String rawPassword) {
+        boolean created = false;
+
+        String keycloakUserId = keycloakAuthService.findUserIdByEmailOrNull(email);
+        if (keycloakUserId == null) {
+            keycloakUserId = keycloakAuthService.createUser(
+                    email,
+                    deriveFirstName(roleKey),
+                    deriveLastName(roleKey),
+                    rawPassword,
+                    role.name()
+            );
+            created = true;
+            log.info("Created Keycloak user {} with role {}.", email, role);
+        }
+
+        keycloakAuthService.syncSeededUser(keycloakUserId, role.name());
+
+        User existingLocal = userRepository.findByEmail(email).orElse(null);
+        if (existingLocal != null && existingLocal.isAccountDeleted()) {
+            log.info("Skipping reconcile for deleted account {}.", email);
+            return false;
+        }
+
+        User user = userRepository.findByEmail(email).orElse(null);
+        if (user == null) {
+            user = buildUser(roleKey, role, email, rawPassword);
+            user.setKeycloakId(keycloakUserId);
+            userRepository.save(user);
+            log.info("Created local record for {} with role {}.", email, role);
+        } else if (!keycloakUserId.equals(user.getKeycloakId()) || user.getRole() != role) {
+            user.setKeycloakId(keycloakUserId);
+            user.setRole(role);
+            userRepository.save(user);
+            log.info("Re-linked local record for {} to Keycloak id {} with role {}.", email, keycloakUserId, role);
+        }
+
+        return created;
     }
 
     private UserRole resolveRole(String roleKey) {

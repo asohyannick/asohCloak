@@ -8,6 +8,7 @@ import com.asohCloak.asohCloak.enums.UserRole;
 import com.asohCloak.asohCloak.exception.badRequestException.BadRequestException;
 import com.asohCloak.asohCloak.exception.keycloakAuthenticationException.KeycloakAuthenticationException;
 import com.asohCloak.asohCloak.exception.notFoundRequestException.NotFoundRequestException;
+import com.asohCloak.asohCloak.exception.unauthorizedRequestException.UnAuthorizedRequestException;
 import com.asohCloak.asohCloak.mapper.userMappper.UserMapper;
 import com.asohCloak.asohCloak.repository.userRepository.UserRepository;
 import com.asohCloak.asohCloak.service.firebaseAuthService.FirebaseAuthService;
@@ -38,10 +39,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.Base64;
-import java.util.List;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 
 @Service
 @Transactional
@@ -104,12 +102,6 @@ public class UserService {
             "firstName", "lastName", "email", "role", "createdAt", "updatedAt"
     );
 
-    private Sort resolveSort(String sortBy, String sortDirection) {
-        String field = (sortBy != null && ALLOWED_SORT_FIELDS.contains(sortBy)) ? sortBy : "createdAt";
-        Sort.Direction direction = "ASC".equalsIgnoreCase(sortDirection) ? Sort.Direction.ASC : Sort.Direction.DESC;
-        return Sort.by(direction, field);
-    }
-
     private UserResponseDto toUserResponseDto(User user) {
         return new UserResponseDto(
                 user.getId(),
@@ -120,22 +112,9 @@ public class UserService {
                 user.isAccountVerified(),
                 user.isAccountLocked(),
                 user.isAccountSuspended(),
+                user.isAccountBlocked(),
                 user.getCreatedAt(),
                 user.getUpdatedAt()
-        );
-    }
-
-    private PagedResponseDto<UserResponseDto> toPagedResponse(Page<User> userPage) {
-        List<UserResponseDto> content = userPage.getContent().stream()
-                .map(this::toUserResponseDto)
-                .toList();
-        return new PagedResponseDto<>(
-                content,
-                userPage.getNumber(),
-                userPage.getSize(),
-                userPage.getTotalElements(),
-                userPage.getTotalPages(),
-                userPage.isLast()
         );
     }
 
@@ -161,6 +140,7 @@ public class UserService {
         user.setAccountVerified(false);
         user.setOtpCode(otpCode);
         user.setOtpCodeVerified(false);
+        user.setAccountBlocked(false);
         user.setOtpExpiryDate(Instant.now().plus(OTP_VALIDITY_MINUTES, ChronoUnit.MINUTES));
         user.setMagicLinkExpiryDate(Instant.now());
 
@@ -187,10 +167,18 @@ public class UserService {
         );
 
         return new UserResponseDto(
-                savedUser.getId(), savedUser.getFirstName(), savedUser.getLastName(),
-                savedUser.getEmail(), savedUser.getRole(), savedUser.isAccountVerified(),
-                savedUser.isAccountLocked(), savedUser.isAccountSuspended(),
-                savedUser.getCreatedAt(), savedUser.getUpdatedAt()
+                savedUser.getId(),
+                savedUser.getFirstName(),
+                savedUser.getLastName(),
+                savedUser.getEmail(),
+                savedUser.getRole(),
+                savedUser.isAccountVerified(),
+                savedUser.isAccountLocked(),
+                savedUser.isAccountSuspended(),
+                savedUser.isAccountBlocked(),
+                savedUser.getCreatedAt(),
+                savedUser.getUpdatedAt()
+
         );
     }
 
@@ -210,6 +198,8 @@ public class UserService {
         user.setOtpCodeVerified(true);
         user.setOtpCode(null);
         user.setOtpExpiryDate(null);
+        user.setAccountBlocked(false);
+        keycloakAuthService.markEmailVerified(user.getKeycloakId());
 
         User savedUser = userRepository.save(user);
 
@@ -237,6 +227,7 @@ public class UserService {
                 savedUser.isAccountVerified(),
                 savedUser.isAccountLocked(),
                 savedUser.isAccountSuspended(),
+                savedUser.isAccountBlocked(),
                 savedUser.getCreatedAt(),
                 savedUser.getUpdatedAt()
         );
@@ -254,6 +245,7 @@ public class UserService {
 
         user.setOtpCode(newOtpCode);
         user.setOtpCodeVerified(false);
+        user.setAccountBlocked(false);
         user.setOtpExpiryDate(Instant.now().plus(OTP_VALIDITY_MINUTES, ChronoUnit.MINUTES));
 
         User savedUser = userRepository.save(user);
@@ -281,6 +273,7 @@ public class UserService {
                 savedUser.isAccountVerified(),
                 savedUser.isAccountLocked(),
                 savedUser.isAccountSuspended(),
+                savedUser.isAccountBlocked(),
                 savedUser.getCreatedAt(),
                 savedUser.getUpdatedAt()
         );
@@ -460,6 +453,7 @@ public class UserService {
                 savedUser.isAccountVerified(),
                 savedUser.isAccountLocked(),
                 savedUser.isAccountSuspended(),
+                savedUser.isAccountBlocked(),
                 savedUser.getCreatedAt(),
                 savedUser.getUpdatedAt()
         );
@@ -478,6 +472,7 @@ public class UserService {
         user.setAccountLocked(false);
         user.setFailedLoginAttempts(0);
         user.setLockedUntil(null);
+        user.setAccountBlocked(false);
         User savedUser = userRepository.save(user);
 
         asyncTaskRunner.runInBackground(
@@ -503,6 +498,7 @@ public class UserService {
                 savedUser.isAccountVerified(),
                 savedUser.isAccountLocked(),
                 savedUser.isAccountSuspended(),
+                savedUser.isAccountBlocked(),
                 savedUser.getCreatedAt(),
                 savedUser.getUpdatedAt()
         );
@@ -570,42 +566,55 @@ public class UserService {
     }
 
     @Caching(evict = {
-            @CacheEvict(cacheNames = "user", key = "#userId"),
+            @CacheEvict(cacheNames = "user", key = "#targetUserId"),
             @CacheEvict(cacheNames = {"users", "userSearch"}, allEntries = true)
     })
-    public void deleteOwnAccount(UUID userId, DeleteAccountRequestDto deleteAccountRequestDto) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new BadRequestException("No account found with this id."));
+    public void deleteAccount(UUID targetUserId,
+                              String callerKeycloakId,
+                              String callerEmail,
+                              boolean callerIsAdmin,
+                              DeleteAccountRequestDto dto) {
 
-        if (user.isAccountDeleted()) {
+        User caller = resolveCaller(callerKeycloakId, callerEmail);
+
+        User target = userRepository.findById(targetUserId)
+                .orElseThrow(() -> new NotFoundRequestException("No account found with this id."));
+
+        boolean isSelf = caller.getId().equals(target.getId());
+        if (!isSelf && !callerIsAdmin) {
+            throw new UnAuthorizedRequestException("You are not allowed to delete this account.");
+        }
+        if (target.isAccountDeleted()) {
             throw new BadRequestException("Account is already deleted.");
         }
 
-        // Confirm the caller actually knows the password before destroying the account.
         try {
-            keycloakAuthService.login(user.getEmail(), deleteAccountRequestDto.password());
+            KeycloakTokenResponse confirmation = keycloakAuthService.login(caller.getEmail(), dto.password());
+            keycloakAuthService.logout(confirmation.refreshToken()); // don't leave a stray session behind
         } catch (KeycloakAuthenticationException ex) {
             throw new BadRequestException("Incorrect password. Account deletion was not completed.");
         }
 
-        // Revoke Keycloak sessions / disable the identity so old tokens stop working immediately.
-        keycloakAuthService.disableUser(user.getEmail());
+        keycloakAuthService.disableUser(target.getEmail());
 
-        user.setAccountDeleted(true);
-        user.setAccountBlocked(true);
-        user.setMagicLinkToken(null);
-        user.setMagicLinkExpiryDate(null);
-        user.setForgotPassword(null);
-        user.setForgotPasswordExpiryDate(null);
-        user.setOtpCode(null);
-        user.setOtpExpiryDate(null);
+        target.setAccountDeleted(true);
+        target.setAccountBlocked(true);
+        target.setMagicLinkToken(null);
+        target.setMagicLinkExpiryDate(null);
+        target.setForgotPassword(null);
+        target.setForgotPasswordExpiryDate(null);
+        target.setOtpCode(null);
+        target.setOtpExpiryDate(null);
+        User savedUser = userRepository.save(target);
 
-        User savedUser = userRepository.save(user);
+        log.info("Account {} deleted by {} ({}).", savedUser.getEmail(), caller.getEmail(),
+                isSelf ? "self" : "admin");
 
+        String reason = dto.reasonOrDefault();
         asyncTaskRunner.runInBackground(
                 () -> {
                     String html = EmailTemplateMessager.accountDeletedEmailAsync(
-                            savedUser.getFirstName(), savedUser.getLastName(), deleteAccountRequestDto.reason());
+                            savedUser.getFirstName(), savedUser.getLastName(), reason);
                     return resendMailService.sendEmail(
                             savedUser.getEmail(), "Your account has been deleted - AsohClock", html);
                 },
@@ -617,17 +626,10 @@ public class UserService {
         );
     }
 
-    @Cacheable(
-            cacheNames = "users",
-            key = "'page_' + #page + '_size_' + #size + '_sort_' + #sortBy + '_' + #sortDirection"
-    )
-    public PagedResponseDto<UserResponseDto> fetchUsers(int page, int size, String sortBy, String sortDirection) {
-        int safePage = Math.max(page, 0);
-        int safeSize = size <= 0 ? 20 : Math.min(size, 100);
-        Pageable pageable = PageRequest.of(safePage, safeSize, resolveSort(sortBy, sortDirection));
-
-        Page<User> userPage = userRepository.findByAccountDeletedFalse(pageable);
-        return toPagedResponse(userPage);
+    @Cacheable(cacheNames = "users", key = "#query.cacheKey()")
+    public PagedResponseDto<UserResponseDto> fetchUsers(PageQuery query) {
+        Page<User> userPage = userRepository.findByAccountDeletedFalse(query.toPageable());
+        return PagedResponseDto.from(userPage, this::toUserResponseDto);
     }
 
     @Cacheable(cacheNames = "user", key = "#userId")
@@ -638,28 +640,11 @@ public class UserService {
         return toUserResponseDto(user);
     }
 
-    @Cacheable(
-            cacheNames = "userSearch",
-            key = "T(java.util.Objects).hash(#request.keyword(), #request.role(), " +
-                    "#request.accountVerified(), #request.accountBlocked(), #request.accountSuspended(), " +
-                    "#request.pageOrDefault(), #request.sizeOrDefault(), " +
-                    "#request.sortByOrDefault(), #request.sortDirectionOrDefault())"
-    )
+    @Cacheable(cacheNames = "userSearch", key = "#request.cacheKey()")
     public PagedResponseDto<UserResponseDto> searchUsers(UserSearchRequestDto request) {
-        Pageable pageable = PageRequest.of(
-                request.pageOrDefault(),
-                request.sizeOrDefault(),
-                resolveSort(request.sortByOrDefault(), request.sortDirectionOrDefault())
-        );
         Specification<User> spec = UserSpecification.build(request);
-        Page<User> userPage = userRepository.findAll(spec, pageable);
-        return toPagedResponse(userPage);
-    }
-
-    public UUID resolveUserIdFromEmail(String email) {
-        return userRepository.findByEmail(email)
-                .orElseThrow(() -> new NotFoundRequestException("No account found for the authenticated user."))
-                .getId();
+        Page<User> userPage = userRepository.findAll(spec, request.toPageQuery().toPageable());
+        return PagedResponseDto.from(userPage, this::toUserResponseDto);
     }
 
     public LoginResponseDto loginViaGoogle(VerifyFirebaseIDTokenRequestDto verifyFirebaseIDTokenRequestDto) {
@@ -738,5 +723,21 @@ public class UserService {
             keycloakAuthService.deleteUserById(keycloakUserId);
             throw ex;
         }
+    }
+
+    private User resolveCaller(String keycloakId, String email) {
+        Optional<User> caller = Optional.empty();
+        if (keycloakId != null && !keycloakId.isBlank()) {
+            caller = userRepository.findByKeycloakId(keycloakId);
+        }
+        if (caller.isEmpty() && email != null && !email.isBlank()) {
+            caller = userRepository.findByEmail(email.trim().toLowerCase());
+        }
+        User user = caller.orElseThrow(() ->
+                new NotFoundRequestException("No account found for the authenticated user."));
+        if (user.isAccountDeleted()) {
+            throw new UnAuthorizedRequestException("This session belongs to a deleted account.");
+        }
+        return user;
     }
 }

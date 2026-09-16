@@ -14,5 +14,7 @@ public interface UserRepository extends JpaRepository<User, UUID>, JpaSpecificat
     Optional<User> findByOtpCode(String otpCode);
     Optional<User> findByForgotPassword(String forgotPasswordHash);
     Optional<User> findByMagicLinkToken(String magicLinkTokenHash);
+    Optional<User> findByKeycloakId(String keycloakId);
     Page<User> findByAccountDeletedFalse(Pageable pageable);
+
 }

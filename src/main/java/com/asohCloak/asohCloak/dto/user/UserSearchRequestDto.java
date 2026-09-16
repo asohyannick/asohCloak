@@ -12,19 +12,25 @@ public record UserSearchRequestDto(
         String sortBy,
         String sortDirection
 ) {
-    public int pageOrDefault() {
-        return page == null || page < 0 ? 0 : page;
+    public PageQuery toPageQuery() {
+        return PageQuery.of(page, size, sortBy, sortDirection);
     }
 
-    public int sizeOrDefault() {
-        return size == null || size <= 0 ? 20 : Math.min(size, 100);
+    public int pageOrDefault()             { return toPageQuery().page(); }
+    public int sizeOrDefault()             { return toPageQuery().size(); }
+    public String sortByOrDefault()        { return toPageQuery().sortBy(); }
+    public String sortDirectionOrDefault() { return toPageQuery().sortDirection(); }
+
+    public String normalizedKeyword() {
+        return (keyword == null || keyword.isBlank()) ? "" : keyword.trim().toLowerCase();
     }
 
-    public String sortByOrDefault() {
-        return (sortBy == null || sortBy.isBlank()) ? "createdAt" : sortBy;
-    }
-
-    public String sortDirectionOrDefault() {
-        return sortDirection == null ? "DESC" : sortDirection;
+    public String cacheKey() {
+        return "kw=" + normalizedKeyword()
+                + "|role=" + role
+                + "|verified=" + accountVerified
+                + "|blocked=" + accountBlocked
+                + "|suspended=" + accountSuspended
+                + "|" + toPageQuery().cacheKey();
     }
 }

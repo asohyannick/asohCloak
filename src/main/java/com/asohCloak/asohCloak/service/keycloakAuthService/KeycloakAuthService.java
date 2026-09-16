@@ -18,8 +18,10 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 import java.net.URI;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 @Service
 @RequiredArgsConstructor
@@ -78,9 +80,12 @@ public class KeycloakAuthService {
             String path = location.getPath();
 
             String keycloakUserId = path.substring(path.lastIndexOf('/') + 1);
-
-            assignRealmRole(keycloakUserId, roleName, adminToken);
-
+            try {
+                assignRealmRole(keycloakUserId, roleName, adminToken);
+            } catch (RuntimeException e) {
+                deleteUserById(keycloakUserId);
+                throw e;
+            }
             return keycloakUserId;
 
         } catch (HttpClientErrorException.Conflict e) {
@@ -468,6 +473,107 @@ public class KeycloakAuthService {
         } catch (HttpClientErrorException.Conflict _) {
         } catch (RestClientException e) {
             log.error("Failed to create realm role '{}' in Keycloak: {}", roleName, e.getMessage(), e);
+        }
+    }
+    public void ensureUserHasRealmRole(String keycloakUserId, String roleName) {
+        String adminToken = getAdminAccessToken();
+        String uri = "/admin/realms/" + keycloakProperties.getRealm()
+                + "/users/" + keycloakUserId + "/role-mappings/realm";
+
+        List<Map<String, Object>> current = keycloakRestClient.get()
+                .uri(uri)
+                .header("Authorization", "Bearer " + adminToken)
+                .retrieve()
+                .body(new ParameterizedTypeReference<>() {});
+
+        boolean hasRole = current != null && current.stream()
+                .anyMatch(r -> roleName.equals(r.get("name")));
+
+        if (!hasRole) {
+            assignRealmRole(keycloakUserId, roleName, adminToken);
+            log.info("Assigned missing realm role '{}' to Keycloak user {}", roleName, keycloakUserId);
+        }
+    }
+
+    /** Returns the Keycloak user id for this email, or null if none exists. */
+    public String findUserIdByEmailOrNull(String email) {
+        String adminToken = getAdminAccessToken();
+        try {
+            List<Map<String, Object>> users = keycloakRestClient.get()
+                    .uri(b -> b.path("/admin/realms/{realm}/users")
+                            .queryParam("email", "{email}")
+                            .queryParam("exact", true)
+                            .build(keycloakProperties.getRealm(), email))
+                    .header("Authorization", "Bearer " + adminToken)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+            return (users == null || users.isEmpty()) ? null : String.valueOf(users.get(0).get("id"));
+        } catch (RestClientException e) {
+            throw new KeycloakAuthenticationException("Unable to look up Keycloak user.", e);
+        }
+    }
+
+    /** Idempotently brings a seeded user in line: role mapped, enabled, email verified. */
+    public void syncSeededUser(String keycloakUserId, String roleName) {
+        String adminToken = getAdminAccessToken();
+        ensureUserHasRealmRole(keycloakUserId, roleName, adminToken);
+        updateUser(keycloakUserId, adminToken, rep -> {
+            rep.put("enabled", true);
+            rep.put("emailVerified", true);
+            rep.put("requiredActions", List.of());
+        });
+    }
+
+    /** Called after OTP verification so Keycloak agrees the email is verified. */
+    public void markEmailVerified(String keycloakUserId) {
+        String adminToken = getAdminAccessToken();
+        updateUser(keycloakUserId, adminToken, rep -> rep.put("emailVerified", true));
+    }
+
+    private void ensureUserHasRealmRole(String keycloakUserId, String roleName, String adminToken) {
+        List<Map<String, Object>> current;
+        try {
+            current = keycloakRestClient.get()
+                    .uri("/admin/realms/{realm}/users/{id}/role-mappings/realm",
+                            keycloakProperties.getRealm(), keycloakUserId)
+                    .header("Authorization", "Bearer " + adminToken)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+        } catch (RestClientException e) {
+            throw new KeycloakAuthenticationException("Unable to read role mappings.", e);
+        }
+
+        boolean hasRole = current != null && current.stream()
+                .anyMatch(r -> roleName.equals(r.get("name")));
+        if (!hasRole) {
+            assignRealmRole(keycloakUserId, roleName, adminToken);
+            log.info("Assigned missing realm role '{}' to Keycloak user {}.", roleName, keycloakUserId);
+        }
+    }
+
+    /** GET → mutate → PUT, so fields we don't touch (names, attributes) are preserved. */
+    private void updateUser(String keycloakUserId, String adminToken, Consumer<Map<String, Object>> mutator) {
+        try {
+            Map<String, Object> rep = keycloakRestClient.get()
+                    .uri("/admin/realms/{realm}/users/{id}", keycloakProperties.getRealm(), keycloakUserId)
+                    .header("Authorization", "Bearer " + adminToken)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+            if (rep == null) {
+                throw new KeycloakAuthenticationException("Keycloak user not found: " + keycloakUserId);
+            }
+            Map<String, Object> updated = new HashMap<>(rep);
+            mutator.accept(updated);
+
+            keycloakRestClient.put()
+                    .uri("/admin/realms/{realm}/users/{id}", keycloakProperties.getRealm(), keycloakUserId)
+                    .header("Authorization", "Bearer " + adminToken)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(updated)
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (RestClientException e) {
+            throw new KeycloakAuthenticationException("Unable to update Keycloak user.", e);
         }
     }
 }

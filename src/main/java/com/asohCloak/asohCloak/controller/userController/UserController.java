@@ -16,6 +16,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
@@ -291,7 +293,8 @@ public class UserController {
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(defaultValue = "createdAt") String sortBy,
             @RequestParam(defaultValue = "DESC") String sortDirection) {
-        PagedResponseDto<UserResponseDto> response = userService.fetchUsers(page, size, sortBy, sortDirection);
+        PageQuery query = new PageQuery(page, size, sortBy, sortDirection);
+        PagedResponseDto<UserResponseDto> response = userService.fetchUsers(query);
         return ResponseEntity.ok(new GlobalSuccessResponse<>("Users fetched successfully.", response, 200));
     }
 
@@ -343,23 +346,34 @@ public class UserController {
     }
 
     @Operation(
-            summary = "Delete my own account",
-            description = "Soft-deletes the authenticated user's own account after confirming their password. " +
-                    "The account and its Keycloak identity are disabled; this action cannot be undone by the user."
+            summary = "Delete an account",
+            description = "Soft-deletes the account with the given id. Users may delete their own account; " +
+                    "admins may delete any account. The caller must confirm with their own password."
     )
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Account deleted successfully"),
-            @ApiResponse(responseCode = "400", description = "Incorrect password, or the account is already deleted")
+            @ApiResponse(responseCode = "400", description = "Incorrect password, or the account is already deleted"),
+            @ApiResponse(responseCode = "403", description = "Caller is neither the account owner nor an admin"),
+            @ApiResponse(responseCode = "404", description = "No account found with this id")
     })
-    @DeleteMapping("/me")
-    @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<GlobalSuccessResponse<Void>> deleteOwnAccount(
-            Authentication authentication,
+    @PreAuthorize("isAuthenticated()")
+    @DeleteMapping("/{id}")
+    public ResponseEntity<GlobalSuccessResponse<Void>> deleteAccount(
+            @PathVariable UUID id,
+            JwtAuthenticationToken authentication,
             @Valid @RequestBody DeleteAccountRequestDto deleteAccountRequestDto) {
-        UUID userId = userService.resolveUserIdFromEmail(authentication.getName());
-        userService.deleteOwnAccount(userId, deleteAccountRequestDto);
+
+        Jwt jwt = authentication.getToken();
+        String callerEmail = jwt.getClaimAsString("email") != null
+                ? jwt.getClaimAsString("email")
+                : jwt.getClaimAsString("preferred_username");
+        boolean callerIsAdmin = authentication.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+
+        userService.deleteAccount(id, jwt.getSubject(), callerEmail, callerIsAdmin, deleteAccountRequestDto);
+
         return ResponseEntity.ok(new GlobalSuccessResponse<>(
-                "Your account has been deleted successfully.",
+                "Account has been deleted successfully.",
                 null,
                 200
         ));
