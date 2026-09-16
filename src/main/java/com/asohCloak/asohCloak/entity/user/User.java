@@ -102,6 +102,12 @@ public class User {
     @Column
     private String refreshToken;
 
+    @Column(name = "deleted_email")
+    private String deletedEmail;
+
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
+
     @CreationTimestamp
     @Column(nullable = false, updatable = false)
     private Instant createdAt;

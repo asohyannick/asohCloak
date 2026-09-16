@@ -16,5 +16,5 @@ public interface UserRepository extends JpaRepository<User, UUID>, JpaSpecificat
     Optional<User> findByMagicLinkToken(String magicLinkTokenHash);
     Optional<User> findByKeycloakId(String keycloakId);
     Page<User> findByAccountDeletedFalse(Pageable pageable);
-
+    boolean existsByDeletedEmail(String deletedEmail);
 }

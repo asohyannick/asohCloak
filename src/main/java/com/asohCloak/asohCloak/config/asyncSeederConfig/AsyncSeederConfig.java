@@ -1,6 +1,7 @@
 package com.asohCloak.asohCloak.config.asyncSeederConfig;
 
 import com.asohCloak.asohCloak.config.asyncSeederConfig.userSeedCredential.UserSeedCredential;
+import com.asohCloak.asohCloak.dto.user.KeycloakCreateUserRequest;
 import com.asohCloak.asohCloak.entity.user.User;
 import com.asohCloak.asohCloak.enums.UserRole;
 import com.asohCloak.asohCloak.repository.userRepository.UserRepository;
@@ -90,13 +91,14 @@ public class AsyncSeederConfig implements ApplicationRunner {
 
         String keycloakUserId = keycloakAuthService.findUserIdByEmailOrNull(email);
         if (keycloakUserId == null) {
-            keycloakUserId = keycloakAuthService.createUser(
+            keycloakUserId = keycloakAuthService.createUser(new KeycloakCreateUserRequest(
                     email,
                     deriveFirstName(roleKey),
                     deriveLastName(roleKey),
                     rawPassword,
-                    role.name()
-            );
+                    role.name(),
+                    true
+            ));
             created = true;
             log.info("Created Keycloak user {} with role {}.", email, role);
         }

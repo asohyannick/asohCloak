@@ -1,6 +1,7 @@
 package com.asohCloak.asohCloak.service.keycloakAuthService;
 
 import com.asohCloak.asohCloak.config.securityConfig.keycloakProperties.KeycloakProperties;
+import com.asohCloak.asohCloak.dto.user.KeycloakCreateUserRequest;
 import com.asohCloak.asohCloak.dto.user.KeycloakTokenResponse;
 import com.asohCloak.asohCloak.exception.badRequestException.BadRequestException;
 import com.asohCloak.asohCloak.exception.keycloakAuthenticationException.KeycloakAuthenticationException;
@@ -37,30 +38,23 @@ public class KeycloakAuthService {
      * canonical account creation step — the local User row is a read-optimized
      * mirror, not the source of truth.
      */
-    public String createUser(
-            String email,
-            String firstName,
-            String lastName,
-            String password,
-            String roleName
-    ) {
+    public String createUser(KeycloakCreateUserRequest req) {
         String adminToken = getAdminAccessToken();
 
         Map<String, Object> credential = Map.of(
                 "type", "password",
-                "value", password,
+                "value", req.password(),
                 "temporary", false
         );
 
-        Map<String, Object> userPayload = Map.of(
-                "username", email,
-                "email", email,
-                "firstName", firstName,
-                "lastName", lastName,
-                "enabled", true,
-                "emailVerified", false,
-                "credentials", List.of(credential)
-        );
+        Map<String, Object> userPayload = new HashMap<>();
+        userPayload.put("username", req.email());
+        userPayload.put("email", req.email());
+        userPayload.put("firstName", req.firstName());
+        userPayload.put("lastName", req.lastName());
+        userPayload.put("enabled", true);
+        userPayload.put("emailVerified", req.emailVerified());
+        userPayload.put("credentials", List.of(credential));
 
         String createUri = "/admin/realms/" + keycloakProperties.getRealm() + "/users";
 
@@ -78,22 +72,25 @@ public class KeycloakAuthService {
                 throw new KeycloakAuthenticationException("Keycloak did not return a location for the created user.");
             }
             String path = location.getPath();
-
             String keycloakUserId = path.substring(path.lastIndexOf('/') + 1);
+
             try {
-                assignRealmRole(keycloakUserId, roleName, adminToken);
+                assignRealmRole(keycloakUserId, req.roleName(), adminToken);
             } catch (RuntimeException e) {
-                deleteUserById(keycloakUserId);
+                deleteUser(keycloakUserId);
                 throw e;
             }
             return keycloakUserId;
 
         } catch (HttpClientErrorException.Conflict e) {
-            log.warn("Keycloak user creation conflict for {}: {}", email, e.getMessage());
+            log.warn("Keycloak user creation conflict for {}: {}", req.email(), e.getResponseBodyAsString());
             throw new BadRequestException("Account with this email already exists.");
+        } catch (HttpClientErrorException.BadRequest e) {
+            log.warn("Keycloak rejected user data for {}: {}", req.email(), e.getResponseBodyAsString());
+            throw new BadRequestException("The account details were rejected by the identity server.");
         } catch (RestClientException e) {
-            log.error("Keycloak user creation failed for {}: {}", email, e.getMessage(), e);
-            throw new KeycloakAuthenticationException("Unable to create account at this time.", e);
+            log.error("Keycloak user creation failed for {}: {}", req.email(), e.getMessage(), e);
+            throw KeycloakAuthenticationException.unavailable(e);
         }
     }
 
@@ -103,25 +100,20 @@ public class KeycloakAuthService {
      * no matching local record. Failures here are logged, not thrown — we don't
      * want a cleanup failure to mask the original error.
      */
-    public void deleteUserById(String keycloakUserId) {
-        String adminToken;
-        try {
-            adminToken = getAdminAccessToken();
-        } catch (RuntimeException e) {
-            log.error("Could not obtain admin token to roll back Keycloak user {}: {}", keycloakUserId, e.getMessage(), e);
-            return;
-        }
-
-        String userUri = "/admin/realms/" + keycloakProperties.getRealm() + "/users/" + keycloakUserId;
+    public void deleteUser(String keycloakUserId) {
+        String adminToken = getAdminAccessToken();
         try {
             keycloakRestClient.delete()
-                    .uri(userUri)
+                    .uri("/admin/realms/{realm}/users/{id}", keycloakProperties.getRealm(), keycloakUserId)
                     .header("Authorization", "Bearer " + adminToken)
                     .retrieve()
                     .toBodilessEntity();
-            log.info("Rolled back orphaned Keycloak user {} after registration failure.", keycloakUserId);
+            log.info("Deleted Keycloak user {}.", keycloakUserId);
+        } catch (HttpClientErrorException.NotFound e) {
+            log.warn("Keycloak user {} was already gone.", keycloakUserId);
         } catch (RestClientException e) {
-            log.error("Failed to roll back Keycloak user {} after registration failure: {}", keycloakUserId, e.getMessage(), e);
+            log.error("Failed to delete Keycloak user {}: {}", keycloakUserId, e.getMessage(), e);
+            throw KeycloakAuthenticationException.unavailable(e);
         }
     }
 
@@ -270,7 +262,7 @@ public class KeycloakAuthService {
             log.warn("Keycloak logout called with an already-invalid refresh token: {}", e.getMessage());
         } catch (RestClientException e) {
             log.error("Keycloak logout call failed: {}", e.getMessage(), e);
-            throw new KeycloakAuthenticationException("Unable to log out at this time.", e);
+            throw KeycloakAuthenticationException.unavailable(e);
         }
     }
 

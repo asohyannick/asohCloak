@@ -25,11 +25,12 @@ import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.Caching;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -62,6 +63,7 @@ public class UserService {
     private final AsyncTaskRunner asyncTaskRunner;
     private final KeycloakAuthService keycloakAuthService;
     private final FirebaseAuthService firebaseAuthService;
+    private final JwtDecoder jwtDecoder;
 
     @Value("${app.frontend.reset-password-url}")
     private String frontendResetPasswordUrl;
@@ -119,17 +121,21 @@ public class UserService {
     }
 
     public UserResponseDto register(RegisterRequestDto registerRequestDto) {
+        String email = registerRequestDto.email().trim().toLowerCase();
+        releaseEmailIfDeleted(email);
+
         if (userRepository.existsByEmail(registerRequestDto.email())) {
             throw new BadRequestException("Account with this email already exists.");
         }
 
-        String keycloakUserId = keycloakAuthService.createUser(
+        String keycloakUserId = keycloakAuthService.createUser(new KeycloakCreateUserRequest(
                 registerRequestDto.email(),
                 registerRequestDto.firstName(),
                 registerRequestDto.lastName(),
                 registerRequestDto.password(),
-                UserRole.STUDENT.name()
-        );
+                UserRole.STUDENT.name(),
+                false
+        ));
 
         User user = userMapper.toEntity(registerRequestDto);
         String otpCode = generateOtp();
@@ -148,7 +154,7 @@ public class UserService {
         try {
             savedUser = userRepository.saveAndFlush(user);
         } catch (RuntimeException ex) {
-            keycloakAuthService.deleteUserById(keycloakUserId);
+            keycloakAuthService.deleteUser(keycloakUserId);
             throw ex;
         }
 
@@ -199,7 +205,11 @@ public class UserService {
         user.setOtpCode(null);
         user.setOtpExpiryDate(null);
         user.setAccountBlocked(false);
-        keycloakAuthService.markEmailVerified(user.getKeycloakId());
+        String keycloakUserId = keycloakAuthService.findUserIdByEmailOrNull(user.getEmail());
+        if (keycloakUserId != null) {
+            keycloakAuthService.markEmailVerified(keycloakUserId);
+            user.setKeycloakId(keycloakUserId);
+        }
 
         User savedUser = userRepository.save(user);
 
@@ -279,7 +289,10 @@ public class UserService {
         );
     }
 
+    @Transactional(noRollbackFor = BadRequestException.class)
     public LoginResponseDto login(LoginRequestDto loginRequestDto) {
+        String email = loginRequestDto.email().trim().toLowerCase();
+
         User user = userRepository.findByEmail(loginRequestDto.email())
                 .orElseThrow(() -> new BadRequestException("Invalid email or password."));
 
@@ -305,8 +318,11 @@ public class UserService {
 
         KeycloakTokenResponse tokenResponse;
         try {
-            tokenResponse = keycloakAuthService.login(loginRequestDto.email(), loginRequestDto.password());
+            tokenResponse = keycloakAuthService.login(email, loginRequestDto.password());
         } catch (KeycloakAuthenticationException ex) {
+            if (ex.getStatus() != HttpStatus.UNAUTHORIZED) {
+                throw ex;
+            }
             int attempts = user.getFailedLoginAttempts() + 1;
             user.setFailedLoginAttempts(attempts);
             if (attempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
@@ -323,40 +339,44 @@ public class UserService {
             userRepository.saveAndFlush(user);
         }
 
-        return userMapper.toLoginResponseDto(user, tokenResponse.accessToken(), tokenResponse.refreshToken());
+        return LoginResponseDto.of(user, tokenResponse);
     }
 
     public void logout(LogoutRequestDto logoutRequestDto) {
         keycloakAuthService.logout(logoutRequestDto.refreshToken());
     }
 
-    public GenerateNewAccessTokenResponseDto generateNewAccessToken(GenerateNewAccessToken generateNewAccessToken) {
-        KeycloakTokenResponse tokenResponse =
-                keycloakAuthService.refreshAccessToken(generateNewAccessToken.refreshToken());
+    public GenerateNewAccessTokenResponseDto generateNewAccessToken(GenerateNewAccessToken request) {
+        KeycloakTokenResponse tokens = keycloakAuthService.refreshAccessToken(request.refreshToken());
 
-        String email = keycloakAuthService.getEmailFromAccessToken(tokenResponse.accessToken());
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new BadRequestException("No account found for this session."));
+        User user;
+        try {
+            Jwt jwt = jwtDecoder.decode(tokens.accessToken());
 
-        if (user.isAccountDeleted()) {
-            throw new BadRequestException("Invalid session. Please log in again.");
-        }
-        if (user.isAccountBlocked()) {
-            throw new BadRequestException("Your account has been blocked. Please contact support.");
-        }
-        if (user.isAccountSuspended()) {
-            throw new BadRequestException("Your account has been suspended.");
-        }
-        if (user.isAccountLocked() && user.getLockedUntil() != null && user.getLockedUntil().isAfter(Instant.now())) {
-            throw new BadRequestException("Account is temporarily locked. Please try again later.");
+            user = userRepository.findByKeycloakId(jwt.getSubject())
+                    .or(() -> Optional.ofNullable(jwt.getClaimAsString("email"))
+                            .map(e -> e.trim().toLowerCase())
+                            .flatMap(userRepository::findByEmail))
+                    .orElseThrow(() -> new BadRequestException("No account found for this session."));
+
+            assertAccountCanHoldSession(user);
+        } catch (JwtException | BadRequestException ex) {
+            keycloakAuthService.logout(tokens.refreshToken());
+            throw ex;
         }
 
         Instant now = Instant.now();
+        Long refreshTtl = (tokens.refreshExpiresIn() == null || tokens.refreshExpiresIn() == 0)
+                ? null : tokens.refreshExpiresIn();
+
         return new GenerateNewAccessTokenResponseDto(
-                tokenResponse.accessToken(),
-                tokenResponse.refreshToken(),
-                now,
-                now
+                tokens.accessToken(),
+                tokens.expiresIn(),
+                tokens.expiresIn() == null ? null : now.plusSeconds(tokens.expiresIn()),
+                tokens.refreshToken(),
+                refreshTtl,
+                refreshTtl == null ? null : now.plusSeconds(refreshTtl),
+                tokens.tokenType() == null ? "Bearer" : tokens.tokenType()
         );
     }
 
@@ -562,7 +582,7 @@ public class UserService {
         user.setMagicLinkExpiryDate(null);
         userRepository.save(user);
 
-        return userMapper.toLoginResponseDto(user, tokenResponse.accessToken(), tokenResponse.refreshToken());
+        return LoginResponseDto.of(user, tokenResponse);
     }
 
     @Caching(evict = {
@@ -590,39 +610,37 @@ public class UserService {
 
         try {
             KeycloakTokenResponse confirmation = keycloakAuthService.login(caller.getEmail(), dto.password());
-            keycloakAuthService.logout(confirmation.refreshToken()); // don't leave a stray session behind
+            keycloakAuthService.logout(confirmation.refreshToken());
         } catch (KeycloakAuthenticationException ex) {
             throw new BadRequestException("Incorrect password. Account deletion was not completed.");
         }
 
-        keycloakAuthService.disableUser(target.getEmail());
+        String originalEmail = target.getEmail();
+        String firstName = target.getFirstName();
+        String lastName = target.getLastName();
 
-        target.setAccountDeleted(true);
-        target.setAccountBlocked(true);
-        target.setMagicLinkToken(null);
-        target.setMagicLinkExpiryDate(null);
-        target.setForgotPassword(null);
-        target.setForgotPasswordExpiryDate(null);
-        target.setOtpCode(null);
-        target.setOtpExpiryDate(null);
-        User savedUser = userRepository.save(target);
+        String keycloakId = keycloakAuthService.findUserIdByEmailOrNull(originalEmail);
 
-        log.info("Account {} deleted by {} ({}).", savedUser.getEmail(), caller.getEmail(),
-                isSelf ? "self" : "admin");
+        tombstone(target);
+
+        if (keycloakId != null) {
+            keycloakAuthService.deleteUser(keycloakId);
+        }
+
+        log.info("Account {} deleted by {} ({}).", originalEmail, caller.getEmail(), isSelf ? "self" : "admin");
 
         String reason = dto.reasonOrDefault();
         asyncTaskRunner.runInBackground(
                 () -> {
-                    String html = EmailTemplateMessager.accountDeletedEmailAsync(
-                            savedUser.getFirstName(), savedUser.getLastName(), reason);
+                    String html = EmailTemplateMessager.accountDeletedEmailAsync(firstName, lastName, reason);
                     return resendMailService.sendEmail(
-                            savedUser.getEmail(), "Your account has been deleted - AsohClock", html);
+                            originalEmail, "Your account has been deleted - AsohClock", html);
                 },
                 (CreateEmailResponse response) ->
-                        log.info("Account-deletion confirmation email sent to {}", savedUser.getEmail()),
+                        log.info("Account-deletion confirmation email sent to {}", originalEmail),
                 (Throwable ex) ->
                         log.error("Failed to send account-deletion confirmation email to {}: {}",
-                                savedUser.getEmail(), ex.getMessage(), ex)
+                                originalEmail, ex.getMessage(), ex)
         );
     }
 
@@ -647,40 +665,66 @@ public class UserService {
         return PagedResponseDto.from(userPage, this::toUserResponseDto);
     }
 
-    public LoginResponseDto loginViaGoogle(VerifyFirebaseIDTokenRequestDto verifyFirebaseIDTokenRequestDto) {
-        FirebaseToken decodedToken = firebaseAuthService.verifyIdToken(verifyFirebaseIDTokenRequestDto.idToken());
+    public LoginResponseDto loginViaGoogle(VerifyFirebaseIDTokenRequestDto request) {
+        FirebaseToken decodedToken = firebaseAuthService.verifyIdToken(request.idToken());
 
         if (decodedToken.getEmail() == null || !decodedToken.isEmailVerified()) {
             throw new BadRequestException("Google account email is missing or unverified.");
         }
-        String email = decodedToken.getEmail().toLowerCase();
+        String email = decodedToken.getEmail().trim().toLowerCase();
+        releaseEmailIfDeleted(email);
 
         User user = userRepository.findByEmail(email).orElse(null);
 
         if (user == null) {
             user = provisionGoogleUser(email, decodedToken);
         } else {
-            if (user.isAccountDeleted()) {
-                throw new BadRequestException("Invalid email or password.");
-            }
-            if (user.isAccountBlocked()) {
-                throw new BadRequestException("Your account has been blocked. Please contact support.");
-            }
-            if (user.isAccountSuspended()) {
-                throw new BadRequestException("Your account has been suspended.");
-            }
-            if (user.isAccountLocked() && user.getLockedUntil() != null && user.getLockedUntil().isAfter(Instant.now())) {
-                throw new BadRequestException("Account is temporarily locked. Please try again later.");
-            }
+            assertAccountCanHoldSession(user);
+
             if (!user.isAccountVerified()) {
                 user.setAccountVerified(true);
-                user = userRepository.save(user);
+                user.setOtpCodeVerified(true);
+                user.setOtpCode(null);
+                user.setOtpExpiryDate(null);
             }
+            String keycloakUserId = ensureKeycloakIdentity(user, decodedToken);
+
+            keycloakAuthService.syncSeededUser(keycloakUserId, user.getRole().name());
+
+            user = userRepository.saveAndFlush(user);
         }
 
         KeycloakTokenResponse tokenResponse = keycloakAuthService.impersonateUser(user.getEmail());
-        return userMapper.toLoginResponseDto(user, tokenResponse.accessToken(), tokenResponse.refreshToken());
+        return LoginResponseDto.of(user, tokenResponse);
     }
+
+    /**
+     * Resolves the user's Keycloak identity by email. Recreates it if it was removed
+     * from Keycloak, and re-links the local row if the stored id is stale.
+     */
+    private String ensureKeycloakIdentity(User user, FirebaseToken decodedToken) {
+        String keycloakUserId = keycloakAuthService.findUserIdByEmailOrNull(user.getEmail());
+
+        if (keycloakUserId == null) {
+            log.warn("Keycloak identity missing for {}; recreating it.", user.getEmail());
+            keycloakUserId = keycloakAuthService.createUser(new KeycloakCreateUserRequest(
+                    user.getEmail(),
+                    user.getFirstName(),
+                    user.getLastName(),
+                    generateSecureToken(),
+                    user.getRole().name(),
+                    true
+            ));
+        }
+
+        if (!keycloakUserId.equals(user.getKeycloakId())) {
+            log.info("Re-linking {} to Keycloak id {} (was {}).",
+                    user.getEmail(), keycloakUserId, user.getKeycloakId());
+            user.setKeycloakId(keycloakUserId);
+        }
+        return keycloakUserId;
+    }
+
 
     /**
      * First-time Google sign-in: no local account exists yet, so create one in both
@@ -689,22 +733,29 @@ public class UserService {
      * always authenticate via token-exchange/impersonation, never the password grant.
      */
     private User provisionGoogleUser(String email, FirebaseToken decodedToken) {
-        String firstName = decodedToken.getName();
+        String fullName = decodedToken.getName();
+        String firstName;
         String lastName = "";
-        if (firstName != null && firstName.contains(" ")) {
-            int splitAt = firstName.indexOf(' ');
-            lastName = firstName.substring(splitAt + 1).trim();
-            firstName = firstName.substring(0, splitAt).trim();
+        if (fullName == null || fullName.isBlank()) {
+            firstName = email.substring(0, email.indexOf('@'));
+        } else if (fullName.trim().contains(" ")) {
+            String trimmed = fullName.trim();
+            int splitAt = trimmed.indexOf(' ');
+            firstName = trimmed.substring(0, splitAt);
+            lastName = trimmed.substring(splitAt + 1).trim();
+        } else {
+            firstName = fullName.trim();
         }
 
         String randomPassword = generateSecureToken();
-        String keycloakUserId = keycloakAuthService.createUser(
+        String keycloakUserId = keycloakAuthService.createUser(new KeycloakCreateUserRequest(
                 email,
                 firstName,
                 lastName,
                 randomPassword,
-                UserRole.STUDENT.name()
-        );
+                UserRole.STUDENT.name(),
+                true
+        ));
 
         User user = new User();
         user.setEmail(email);
@@ -718,9 +769,9 @@ public class UserService {
         user.setMagicLinkExpiryDate(Instant.now());
 
         try {
-            return userRepository.save(user);
+            return userRepository.saveAndFlush(user);
         } catch (RuntimeException ex) {
-            keycloakAuthService.deleteUserById(keycloakUserId);
+            keycloakAuthService.deleteUser(keycloakUserId);
             throw ex;
         }
     }
@@ -739,5 +790,51 @@ public class UserService {
             throw new UnAuthorizedRequestException("This session belongs to a deleted account.");
         }
         return user;
+    }
+
+    private void assertAccountCanHoldSession(User user) {
+        if (user.isAccountDeleted()) {
+            throw new BadRequestException("Invalid session. Please log in again.");
+        }
+        if (user.isAccountBlocked()) {
+            throw new BadRequestException("Your account has been blocked. Please contact support.");
+        }
+        if (user.isAccountSuspended()) {
+            throw new BadRequestException("Your account has been suspended.");
+        }
+        if (user.isAccountLocked() && user.getLockedUntil() != null && user.getLockedUntil().isAfter(Instant.now())) {
+            throw new BadRequestException("Account is temporarily locked. Please try again later.");
+        }
+    }
+
+    /** Anonymises a deleted account: keeps the row for audit but releases its email. */
+    private void tombstone(User user) {
+        if (user.getDeletedEmail() == null) {
+            user.setDeletedEmail(user.getEmail());
+        }
+        if (user.getDeletedAt() == null) {
+            user.setDeletedAt(Instant.now());
+        }
+        user.setEmail("deleted-" + user.getId() + "@deleted.invalid");
+        user.setKeycloakId(null);
+        user.setAccountDeleted(true);
+        user.setAccountBlocked(true);
+        user.setPassword("!deleted");
+        user.setMagicLinkToken(null);
+        user.setMagicLinkExpiryDate(null);
+        user.setForgotPassword(null);
+        user.setForgotPasswordExpiryDate(null);
+        user.setOtpCode(null);
+        user.setOtpExpiryDate(null);
+        userRepository.saveAndFlush(user);
+    }
+
+    private void releaseEmailIfDeleted(String email) {
+        userRepository.findByEmail(email)
+                .filter(User::isAccountDeleted)
+                .ifPresent(old -> {
+                    log.info("Releasing email {} from deleted account {}.", email, old.getId());
+                    tombstone(old);
+                });
     }
 }
