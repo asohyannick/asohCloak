@@ -100,10 +100,6 @@ public class UserService {
         }
     }
 
-    private static final Set<String> ALLOWED_SORT_FIELDS = Set.of(
-            "firstName", "lastName", "email", "role", "createdAt", "updatedAt"
-    );
-
     private UserResponseDto toUserResponseDto(User user) {
         return new UserResponseDto(
                 user.getId(),
@@ -213,7 +209,6 @@ public class UserService {
 
         User savedUser = userRepository.save(user);
 
-        // Fire-and-forget confirmation email — doesn't block or affect the response.
         asyncTaskRunner.runInBackground(
                 () -> {
                     String html = EmailTemplateMessager.verifyOtpCodeAsync(

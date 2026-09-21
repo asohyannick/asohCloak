@@ -1,7 +1,10 @@
 package com.asohCloak.asohCloak.exception.forbiddenRequestException;
 
+import lombok.Getter;
+
 import java.io.Serial;
 
+@Getter
 public class ForbiddenRequestException extends RuntimeException {
 
     @Serial
@@ -32,7 +35,4 @@ public class ForbiddenRequestException extends RuntimeException {
         this.statusCode = DEFAULT_STATUS_CODE;
     }
 
-    public int getStatusCode() {
-        return statusCode;
-    }
 }

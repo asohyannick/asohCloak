@@ -8,5 +8,6 @@ import java.util.UUID;
 public record CourseInstructorSummaryDto(
         @Schema(description = "Instructor's internal user ID") UUID id,
         @Schema(description = "Instructor's first name") String firstName,
-        @Schema(description = "Instructor's last name") String lastName
+        @Schema(description = "Instructor's last name") String lastName,
+        String email
 ) { }

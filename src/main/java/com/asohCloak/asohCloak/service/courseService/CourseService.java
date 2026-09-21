@@ -1,9 +1,7 @@
 package com.asohCloak.asohCloak.service.courseService;
 import com.asohCloak.asohCloak.config.asyncScheduler.asyncTaskRunner.AsyncTaskRunner;
 import com.asohCloak.asohCloak.config.emailTemplateMessager.EmailTemplateMessager;
-import com.asohCloak.asohCloak.dto.course.CourseRequestDto;
-import com.asohCloak.asohCloak.dto.course.CourseResponseDto;
-import com.asohCloak.asohCloak.dto.course.CourseSearchRequestDto;
+import com.asohCloak.asohCloak.dto.course.*;
 import com.asohCloak.asohCloak.dto.user.PagedResponseDto;
 import com.asohCloak.asohCloak.entity.course.Course;
 import com.asohCloak.asohCloak.entity.user.User;
@@ -13,10 +11,13 @@ import com.asohCloak.asohCloak.exception.notFoundRequestException.NotFoundReques
 import com.asohCloak.asohCloak.mapper.courseMappper.CourseMapper;
 import com.asohCloak.asohCloak.repository.courseRepository.CourseRepository;
 import com.asohCloak.asohCloak.repository.userRepository.UserRepository;
+import com.asohCloak.asohCloak.service.courseMediaService.CourseMediaService;
 import com.asohCloak.asohCloak.service.minioStorageService.MinioStorageService;
 import com.asohCloak.asohCloak.service.resendMailService.ResendMailService;
 import com.asohCloak.asohCloak.utils.specification.courseSpecification.CourseSpecification;
 import com.resend.services.emails.model.CreateEmailResponse;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
@@ -41,6 +42,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayOutputStream;
@@ -48,6 +51,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
 
@@ -74,6 +78,9 @@ public class CourseService {
     private final ResendMailService resendMailService;
     private final MinioStorageService minioStorageService;
     private final CacheManager cacheManager;
+    private final CourseMediaService courseMediaService;
+    @PersistenceContext
+    private EntityManager entityManager;
 
     @Value("${app.frontend.course-url}")
     private String frontendCourseUrl;
@@ -82,49 +89,64 @@ public class CourseService {
     // 1. CREATE
     // =====================================================================
     @CacheEvict(cacheNames = {"courses", "courseSearch", "courseCount"}, allEntries = true)
-    public CourseResponseDto createCourse(String idempotencyKey, CourseRequestDto courseRequestDto,
-                                          List<MultipartFile> videos, List<MultipartFile> documents) {
+    public CourseCreatedResponseDto createCourse(String idempotencyKey, CourseRequestDto courseRequestDto) {
 
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new BadRequestException("Idempotency-Key header is required.");
         }
-        if (courseRepository.findByIdempotencyKey(idempotencyKey).isPresent()) {
-            throw new ConflictRequestException("A course was already created with this idempotency key.");
+
+        Optional<Course> existing = courseRepository.findByIdempotencyKey(idempotencyKey);
+        if (existing.isPresent()) {
+            Course course = existing.get();
+            boolean samePayload = course.getName().equals(courseRequestDto.name())
+                    && course.getInstructor() != null
+                    && course.getInstructor().getId().equals(courseRequestDto.instructorId());
+            if (samePayload) {
+                log.info("Idempotent replay for key {}; returning course {}.", idempotencyKey, course.getId());
+                return new CourseCreatedResponseDto(
+                        courseMapper.toResponseDto(course),
+                        courseMediaService.resumeUploadSessions(course.getId()));
+            }
+            throw new ConflictRequestException(
+                    "This idempotency key was already used for a different course. Use a new key.");
         }
 
         User instructor = userRepository.findById(courseRequestDto.instructorId())
                 .orElseThrow(() -> new NotFoundRequestException("No instructor found with this id."));
 
-        List<StagedFile> stagedVideos = stageFiles(videos);
-        List<StagedFile> stagedDocuments = stageFiles(documents);
-
         Course course = courseMapper.toEntity(courseRequestDto);
         course.setInstructor(instructor);
         course.setSlug(buildSlug(courseRequestDto.name()));
         course.setIdempotencyKey(idempotencyKey);
-        course.setUploadVideos(new ArrayList<>());
-        course.setUploadDocuments(new ArrayList<>());
 
         Course savedCourse;
         try {
-            savedCourse = courseRepository.save(course);
+            savedCourse = courseRepository.saveAndFlush(course);
         } catch (DataIntegrityViolationException e) {
-            cleanupStagedFiles(stagedVideos, stagedDocuments);
-            throw new ConflictRequestException("A course was already created with this idempotency key.");
+            if (isUniqueViolation(e)) {
+                throw new ConflictRequestException("A course was already created with this idempotency key.");
+            }
+            throw e;
+        }
+
+        List<MediaUploadSessionDto> uploads = courseRequestDto.mediaOrEmpty().isEmpty()
+                ? List.of()
+                : courseMediaService.openUploadSessions(savedCourse.getId(), courseRequestDto.mediaOrEmpty());
+
+        if (!uploads.isEmpty()) {
+            entityManager.refresh(savedCourse);
         }
 
         String courseUrl = frontendCourseUrl + "/" + savedCourse.getSlug();
+        UUID courseId = savedCourse.getId();
+        String courseName = savedCourse.getName();
 
-        sendCourseCreatedEmail(instructor, savedCourse.getName(), courseUrl);
+        runAfterCommit(() -> {
+            sendCourseCreatedEmail(instructor, courseName, courseUrl);
+            queueBrochureGeneration(courseId);
+        });
 
-        queueBrochureGeneration(savedCourse.getId());
-
-        if (!stagedVideos.isEmpty() || !stagedDocuments.isEmpty()) {
-            queueMediaProcessing(savedCourse.getId(), stagedVideos, stagedDocuments,
-                    instructor, savedCourse.getName(), courseUrl);
-        }
-
-        return courseMapper.toResponseDto(savedCourse);
+        return new CourseCreatedResponseDto(courseMapper.toResponseDto(savedCourse), uploads);
     }
 
     // =====================================================================
@@ -134,36 +156,45 @@ public class CourseService {
             @CacheEvict(cacheNames = "course", key = "#courseId"),
             @CacheEvict(cacheNames = {"courses", "courseSearch"}, allEntries = true)
     })
-    public CourseResponseDto updateCourse(UUID courseId, CourseRequestDto courseRequestDto,
-                                          List<MultipartFile> newVideos, List<MultipartFile> newDocuments) {
+    public CourseUpdatedResponseDto updateCourse(UUID courseId, CourseUpdateRequestDto dto) {
 
-        Course course = courseRepository.findByIdAndDeletedFalse(courseId)
+        Course course = courseRepository.findWithDetailsByIdAndDeletedFalse(courseId)
                 .orElseThrow(() -> new NotFoundRequestException("No course found with this id."));
 
         UUID currentInstructorId = course.getInstructor() != null ? course.getInstructor().getId() : null;
-        if (courseRequestDto.instructorId() != null && !courseRequestDto.instructorId().equals(currentInstructorId)) {
-            User newInstructor = userRepository.findById(courseRequestDto.instructorId())
+        if (dto.instructorId() != null && !dto.instructorId().equals(currentInstructorId)) {
+            User newInstructor = userRepository.findById(dto.instructorId())
                     .orElseThrow(() -> new NotFoundRequestException("No instructor found with this id."));
             course.setInstructor(newInstructor);
         }
 
-        courseMapper.updateEntityFromDto(courseRequestDto, course);
-        if (courseRequestDto.name() != null) {
-            course.setSlug(buildSlug(courseRequestDto.name()));
+        boolean nameChanged = dto.name() != null && !dto.name().trim().equals(course.getName());
+
+        courseMapper.updateEntityFromDto(dto, course);
+
+        if (nameChanged) {
+            course.setSlug(buildSlug(course.getName()));
         }
 
-        List<StagedFile> stagedVideos = stageFiles(newVideos);
-        List<StagedFile> stagedDocuments = stageFiles(newDocuments);
-
-        Course savedCourse = courseRepository.save(course);
-
-        if (!stagedVideos.isEmpty() || !stagedDocuments.isEmpty()) {
-            String courseUrl = frontendCourseUrl + "/" + savedCourse.getSlug();
-            queueMediaProcessing(savedCourse.getId(), stagedVideos, stagedDocuments,
-                    savedCourse.getInstructor(), savedCourse.getName(), courseUrl);
+        Course savedCourse;
+        try {
+            savedCourse = courseRepository.saveAndFlush(course);
+        } catch (DataIntegrityViolationException e) {
+            if (isUniqueViolation(e)) {
+                throw new ConflictRequestException("Another course already uses this name or slug.");
+            }
+            throw e;
         }
 
-        return courseMapper.toResponseDto(savedCourse);
+        List<MediaUploadSessionDto> uploads = dto.mediaToAddOrEmpty().isEmpty()
+                ? List.of()
+                : courseMediaService.openUploadSessions(savedCourse.getId(), dto.mediaToAddOrEmpty());
+
+        if (!uploads.isEmpty()) {
+            entityManager.refresh(savedCourse);
+        }
+
+        return new CourseUpdatedResponseDto(courseMapper.toResponseDto(savedCourse), uploads);
     }
 
     // =====================================================================
@@ -184,7 +215,7 @@ public class CourseService {
     // =====================================================================
     @Cacheable(cacheNames = "course", key = "#courseId")
     public CourseResponseDto fetchCourse(UUID courseId) {
-        Course course = courseRepository.findByIdAndDeletedFalse(courseId)
+        Course course = courseRepository.findWithDetailsByIdAndDeletedFalse(courseId)
                 .orElseThrow(() -> new NotFoundRequestException("No course found with this id."));
         return courseMapper.toResponseDto(course);
     }
@@ -197,7 +228,7 @@ public class CourseService {
             @CacheEvict(cacheNames = {"courses", "courseSearch", "courseCount"}, allEntries = true)
     })
     public void deleteCourse(UUID courseId) {
-        Course course = courseRepository.findByIdAndDeletedFalse(courseId)
+        Course course = courseRepository.findWithDetailsByIdAndDeletedFalse(courseId)
                 .orElseThrow(() -> new NotFoundRequestException("No course found with this id."));
         course.setDeleted(true);
         courseRepository.save(course);
@@ -224,7 +255,7 @@ public class CourseService {
     }
 
     public byte[] generateCourseBrochure(UUID courseId) {
-        Course course = courseRepository.findByIdAndDeletedFalse(courseId)
+        Course course = courseRepository.findWithDetailsByIdAndDeletedFalse(courseId)
                 .orElseThrow(() -> new NotFoundRequestException("No course found with this id."));
 
         try (PDDocument document = new PDDocument();
@@ -266,6 +297,13 @@ public class CourseService {
         } catch (IOException e) {
             throw new BadRequestException("Failed to generate PDF for course " + courseId, e);
         }
+    }
+
+    @CacheEvict(cacheNames = "course", key = "#courseId")
+    public void regenerateBrochure(UUID courseId) {
+        courseRepository.findByIdAndDeletedFalse(courseId)
+                .orElseThrow(() -> new NotFoundRequestException("No course found with this id."));
+        runAfterCommit(() -> queueBrochureGeneration(courseId));
     }
 
     private String nullSafe(String value) {
@@ -446,7 +484,7 @@ public class CourseService {
             courseRepository.save(course);
         });
 
-        evictIfPresent("course", courseId);
+        evictIfPresent(courseId);
         clearIfPresent("courses");
         clearIfPresent("courseSearch");
     }
@@ -555,8 +593,8 @@ public class CourseService {
         }
     }
 
-    private void evictIfPresent(String cacheName, Object key) {
-        Cache cache = cacheManager.getCache(cacheName);
+    private void evictIfPresent(Object key) {
+        Cache cache = cacheManager.getCache("course");
         if (cache != null) cache.evict(key);
     }
 
@@ -583,10 +621,10 @@ public class CourseService {
                     try {
                         return generateAndUploadBrochure(courseId);
                     } catch (Exception e) {
-                        throw new BadRequestException(e);
+                        throw new BadRequestException("Brochure generation failed: " + e.getMessage(), e);
                     }
                 },
-                (String brochureUrl) -> appendBrochureUrl(courseId, brochureUrl),
+                (String objectKey) -> appendBrochureObjectKey(courseId, objectKey),
                 (Throwable ex) -> log.error("Failed to generate brochure for course {}: {}", courseId, ex.getMessage(), ex)
         );
     }
@@ -604,25 +642,43 @@ public class CourseService {
         try {
             String objectKey = "courses/%s/brochure/%s.pdf".formatted(courseId, UUID.randomUUID());
             minioStorageService.uploadObject(objectKey, tempFile, "application/pdf");
-            return minioStorageService.generatePresignedGetUrl(objectKey, PRESIGNED_URL_TTL);
+            return objectKey;
         } finally {
             deleteQuietly(tempFile);
         }
     }
 
-    /**
-     * Called from the background callback (self-invocation), so @CacheEvict on
-     * this method would silently do nothing — the Spring AOP proxy is bypassed
-     * on internal calls. Evicting via CacheManager directly works regardless.
-     */
-    private void appendBrochureUrl(UUID courseId, String brochureUrl) {
+    private void appendBrochureObjectKey(UUID courseId, String objectKey) {
         courseRepository.findById(courseId).ifPresent(course -> {
-            course.setBrochureUrl(brochureUrl);
+            course.setBrochureObjectKey(objectKey);
             courseRepository.save(course);
         });
 
-        evictIfPresent("course", courseId);
+        evictIfPresent(courseId);
         clearIfPresent("courses");
         clearIfPresent("courseSearch");
+    }
+
+    private void runAfterCommit(Runnable action) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    action.run();
+                }
+            });
+        } else {
+            action.run();
+        }
+    }
+
+    /** PostgreSQL SQLState 23505 = unique_violation (a duplicate idempotency key or slug). */
+    private boolean isUniqueViolation(Throwable e) {
+        for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+            if (cause instanceof SQLException sql && "23505".equals(sql.getSQLState())) {
+                return true;
+            }
+        }
+        return false;
     }
 }

@@ -15,7 +15,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.*;
@@ -42,7 +41,8 @@ public class UserController {
             @ApiResponse(responseCode = "400", description = "An account with this email already exists, or the request failed validation")
     })
     @PostMapping("/register")
-    public ResponseEntity<GlobalSuccessResponse<UserResponseDto>> register(@Valid @RequestBody RegisterRequestDto registerRequestDto) {
+    public ResponseEntity<GlobalSuccessResponse<UserResponseDto>> register(
+            @Valid @RequestBody RegisterRequestDto registerRequestDto) {
         UserResponseDto response = userService.register(registerRequestDto);
         return ResponseEntity.status(HttpStatus.CREATED).body(new GlobalSuccessResponse<>(
                 "Account has been created successfully. Please, check your email for the verification code sent already for activation.",
@@ -82,7 +82,8 @@ public class UserController {
     })
     @PostMapping("/resend-otp")
     public ResponseEntity<GlobalSuccessResponse<UserResponseDto>> resendOTPVerificationCode(
-            @Valid @RequestBody ResendOTPCodeRequestDto resendOTPCodeRequestDto) {
+            @Valid @RequestBody ResendOTPCodeRequestDto resendOTPCodeRequestDto
+    ) {
         UserResponseDto response = userService.resendOTPVerificationCode(resendOTPCodeRequestDto);
         return ResponseEntity.ok(new GlobalSuccessResponse<>(
                 "OTP verification code has been sent successfully to your email. Please, check your email",
@@ -144,7 +145,8 @@ public class UserController {
             @ApiResponse(responseCode = "200", description = "Logged out successfully")
     })
     @PostMapping("/logout")
-    public ResponseEntity<GlobalSuccessResponse<Void>> logout(@Valid @RequestBody LogoutRequestDto logoutRequestDto) {
+    public ResponseEntity<GlobalSuccessResponse<Void>> logout(
+            @Valid @RequestBody LogoutRequestDto logoutRequestDto) {
         userService.logout(logoutRequestDto);
         return ResponseEntity.ok(new GlobalSuccessResponse<>(
                 "Logged out successfully.",

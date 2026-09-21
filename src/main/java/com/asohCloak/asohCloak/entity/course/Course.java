@@ -1,5 +1,6 @@
 package com.asohCloak.asohCloak.entity.course;
 
+import com.asohCloak.asohCloak.entity.courseMedia.CourseMedia;
 import com.asohCloak.asohCloak.entity.user.User;
 import com.asohCloak.asohCloak.enums.CourseLevel;
 import jakarta.persistence.*;
@@ -9,7 +10,9 @@ import lombok.NoArgsConstructor;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -30,10 +33,10 @@ public class Course {
     @Column(nullable = false, unique = true, length = 220)
     private String slug;
 
-    @Column(length = 2000)
+    @Column(length = 3000)
     private String description;
 
-    @Column(length = 500)
+    @Column(length = 1000)
     private String shortDescription;
 
     @ElementCollection
@@ -49,11 +52,14 @@ public class Course {
     @Column
     private String thumbnailUrl;
 
-    @Column(nullable = false)
-    private double price;
+    @Column(nullable = false, precision = 14, scale = 2)
+    private BigDecimal price = BigDecimal.ZERO;
 
     @Column(nullable = false, length = 3)
     private String currency = "XAF";
+
+    @OneToMany(mappedBy = "course", orphanRemoval = true)
+    private List<CourseMedia> media = new ArrayList<>();
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
@@ -86,8 +92,8 @@ public class Course {
     @Column(nullable = false)
     private boolean published = false;
 
-    @Column
-    private String brochureUrl;
+    @Column(name = "brochure_object_key")
+    private String brochureObjectKey;
 
     @Column
     private Instant publishedAt;

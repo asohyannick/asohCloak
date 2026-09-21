@@ -126,7 +126,6 @@ public class SecurityConfig {
 
                         .requestMatchers(HttpMethod.GET, "/users/{id}").hasRole("ADMIN")
 
-                        // Owner-or-admin is enforced in UserService.deleteAccount.
                         .requestMatchers(HttpMethod.DELETE, "/users/{id}").authenticated()
 
                         .anyRequest().authenticated()

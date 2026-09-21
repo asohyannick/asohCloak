@@ -2,6 +2,7 @@ package com.asohCloak.asohCloak.config.cacheManagerConfig.twoLevelCacheManager;
 
 import com.asohCloak.asohCloak.config.cacheManagerConfig.twoLevelCache.TwoLevelCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import org.jspecify.annotations.NonNull;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -26,13 +27,13 @@ public class TwoLevelCacheManager implements CacheManager {
     }
 
     @Override
-    public Cache getCache(String name) {
+    public Cache getCache(@NonNull String name) {
         return cacheMap.computeIfAbsent(name, n ->
                 new TwoLevelCache(n, caffeineBuilder.build(), redisTemplate, ttl));
     }
 
     @Override
-    public Collection<String> getCacheNames() {
+    public @NonNull Collection<String> getCacheNames() {
         return Set.copyOf(cacheMap.keySet());
     }
 }

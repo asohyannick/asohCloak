@@ -346,3 +346,7 @@ users:
   maintenance-supervisor:
     email: ${MAINTENANCE_SUPERVISOR_EMAIL_ADDRESS}
     password: ${MAINTENANCE_SUPERVISOR_PASSWORD}
+
+logging:
+  level:
+    org.hibernate.orm.jdbc.bind: TRACE

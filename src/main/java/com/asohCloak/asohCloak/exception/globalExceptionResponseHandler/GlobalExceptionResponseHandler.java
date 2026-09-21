@@ -1,7 +1,6 @@
 package com.asohCloak.asohCloak.exception.globalExceptionResponseHandler;
 
 import java.time.Instant;
-
 public record GlobalExceptionResponseHandler(
         Instant timestamp,
         String message,
