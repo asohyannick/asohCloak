@@ -29,7 +29,7 @@ public class SwaggerConfig {
 
     private Info apiInfo() {
         return new Info()
-                .title("AsohCloak API")
+                .title("AsohCloak API Develop and Maintain By Asoh Yannick, Java Backend Developer.")
                 .description(
                         "Authentication & Authorization REST API secured entirely by Keycloak. "
                                 + "Covers registration, login, OTP verification, magic-link login, "

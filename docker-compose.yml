@@ -176,6 +176,17 @@ services:
     networks:
       - asohcloak-net
 
+  otel-lgtm:
+    image: grafana/otel-lgtm:latest
+    container_name: asohcloak-otel-lgtm
+    ports:
+      - "3000:3000"   # Grafana UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+    restart: unless-stopped
+
 networks:
   asohcloak-net:
     driver: bridge

@@ -40,6 +40,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.security.access.annotation.Secured;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -202,6 +203,7 @@ public class CourseService {
     // =====================================================================
     @Cacheable(cacheNames = "courses",
             key = "'page_' + #page + '_size_' + #size + '_sort_' + #sortBy + '_' + #sortDirection")
+    @Secured("ADMIN")
     public PagedResponseDto<CourseResponseDto> fetchCourses(int page, int size, String sortBy, String sortDirection) {
         int safePage = Math.max(page, 0);
         int safeSize = size <= 0 ? 20 : Math.min(size, 100);

@@ -127,6 +127,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/users/{id}").hasRole("ADMIN")
 
                         .requestMatchers(HttpMethod.DELETE, "/users/{id}").authenticated()
+                        .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
+                        .requestMatchers("/actuator/**").hasRole("ADMIN")
 
                         .anyRequest().authenticated()
                 )

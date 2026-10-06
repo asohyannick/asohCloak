@@ -20,6 +20,11 @@ springdoc:
   api-docs:
     enabled: false
 
+management:
+  tracing:
+    sampling:
+      probability: 0.1
+
 server:
   error:
     include-stacktrace: never

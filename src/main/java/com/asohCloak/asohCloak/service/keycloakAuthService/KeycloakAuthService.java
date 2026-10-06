@@ -211,32 +211,6 @@ public class KeycloakAuthService {
         }
     }
 
-    /**
-     * Disables the Keycloak user account (soft-disable, not a hard delete) and
-     * revokes all active sessions so previously issued tokens stop working immediately.
-     */
-    public void disableUser(String email) {
-        String adminToken = getAdminAccessToken();
-        String userId = findUserIdByEmail(email, adminToken);
-
-        Map<String, Object> disablePayload = Map.of("enabled", false);
-        String userUri = "/admin/realms/" + keycloakProperties.getRealm() + "/users/" + userId;
-
-        try {
-            keycloakRestClient.put()
-                    .uri(userUri)
-                    .header("Authorization", "Bearer " + adminToken)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(disablePayload)
-                    .retrieve()
-                    .toBodilessEntity();
-        } catch (RestClientException e) {
-            log.error("Keycloak account disable failed for {}: {}", email, e.getMessage(), e);
-            throw new KeycloakAuthenticationException("Unable to disable account at this time.", e);
-        }
-
-        revokeUserSessions(userId, adminToken, email);
-    }
 
     /**
      * Revokes the given refresh token, ending the session it belongs to.
@@ -312,30 +286,6 @@ public class KeycloakAuthService {
         }
     }
 
-    /**
-     * Resolves the account email tied to a freshly issued access token via Keycloak's
-     * userinfo endpoint, so the caller can re-check current account status (blocked/
-     * suspended/deleted) before honoring the refresh.
-     */
-    public String getEmailFromAccessToken(String accessToken) {
-        String userInfoUri = "/realms/" + keycloakProperties.getRealm() + "/protocol/openid-connect/userinfo";
-
-        try {
-            Map<String, Object> userInfo = keycloakRestClient.get()
-                    .uri(userInfoUri)
-                    .header("Authorization", "Bearer " + accessToken)
-                    .retrieve()
-                    .body(new ParameterizedTypeReference<>() {});
-
-            if (userInfo == null || userInfo.get("email") == null) {
-                throw new KeycloakAuthenticationException("Unable to resolve account for this token.");
-            }
-            return String.valueOf(userInfo.get("email"));
-        } catch (RestClientException e) {
-            log.error("Keycloak userinfo call failed: {}", e.getMessage(), e);
-            throw new KeycloakAuthenticationException("Unable to reach authentication server.", e);
-        }
-    }
 
     private void revokeUserSessions(String userId, String adminToken, String email) {
         String logoutUri = "/admin/realms/" + keycloakProperties.getRealm() + "/users/" + userId + "/logout";
@@ -391,7 +341,7 @@ public class KeycloakAuthService {
             if (users == null || users.isEmpty()) {
                 throw new KeycloakAuthenticationException("No matching Keycloak account found for this email.");
             }
-            return String.valueOf(users.get(0).get("id"));
+            return String.valueOf(users.getFirst().get("id"));
         } catch (RestClientException e) {
             log.error("Keycloak user lookup failed for {}: {}", email, e.getMessage(), e);
             throw new KeycloakAuthenticationException("Unable to reach authentication server.", e);
@@ -412,6 +362,7 @@ public class KeycloakAuthService {
         }
 
         try {
+            assert roleRepresentation != null;
             keycloakRestClient.post()
                     .uri("/admin/realms/" + keycloakProperties.getRealm() + "/users/" + keycloakUserId + "/role-mappings/realm")
                     .header("Authorization", "Bearer " + adminToken)
@@ -467,25 +418,6 @@ public class KeycloakAuthService {
             log.error("Failed to create realm role '{}' in Keycloak: {}", roleName, e.getMessage(), e);
         }
     }
-    public void ensureUserHasRealmRole(String keycloakUserId, String roleName) {
-        String adminToken = getAdminAccessToken();
-        String uri = "/admin/realms/" + keycloakProperties.getRealm()
-                + "/users/" + keycloakUserId + "/role-mappings/realm";
-
-        List<Map<String, Object>> current = keycloakRestClient.get()
-                .uri(uri)
-                .header("Authorization", "Bearer " + adminToken)
-                .retrieve()
-                .body(new ParameterizedTypeReference<>() {});
-
-        boolean hasRole = current != null && current.stream()
-                .anyMatch(r -> roleName.equals(r.get("name")));
-
-        if (!hasRole) {
-            assignRealmRole(keycloakUserId, roleName, adminToken);
-            log.info("Assigned missing realm role '{}' to Keycloak user {}", roleName, keycloakUserId);
-        }
-    }
 
     /** Returns the Keycloak user id for this email, or null if none exists. */
     public String findUserIdByEmailOrNull(String email) {
@@ -499,7 +431,7 @@ public class KeycloakAuthService {
                     .header("Authorization", "Bearer " + adminToken)
                     .retrieve()
                     .body(new ParameterizedTypeReference<>() {});
-            return (users == null || users.isEmpty()) ? null : String.valueOf(users.get(0).get("id"));
+            return (users == null || users.isEmpty()) ? null : String.valueOf(users.getFirst().get("id"));
         } catch (RestClientException e) {
             throw new KeycloakAuthenticationException("Unable to look up Keycloak user.", e);
         }
@@ -568,4 +500,6 @@ public class KeycloakAuthService {
             throw new KeycloakAuthenticationException("Unable to update Keycloak user.", e);
         }
     }
+
+
 }

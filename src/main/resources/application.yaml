@@ -13,10 +13,15 @@ spring:
     name: ${APP_NAME}
 
   datasource:
-    url: jdbc:postgresql://${DATABASE_POSTGRESQL_HOST}:${DATABASE_POSTGRESQL_PORT}/${DATABASE_POSTGRESQL_NAME}
+    url: jdbc:postgresql://${DATABASE_POSTGRESQL_HOST}:${DATABASE_POSTGRESQL_PORT}/${DATABASE_POSTGRESQL_NAME}?sslmode=require
     username: ${DATABASE_POSTGRESQL_USER}
     password: ${DATABASE_POSTGRESQL_PASSWORD}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 1
+      connection-timeout: 20000
+      max-lifetime: 1500000
 
   jpa:
     open-in-view: false
@@ -44,7 +49,7 @@ spring:
           issuer-uri: ${KEYCLOAK_ISSUER_URI}
 
 server:
-  port: ${APP_PORT}
+  port: ${APP_PORT:40000}
   servlet:
     context-path: /api/${API_VERSION}
 
@@ -54,6 +59,42 @@ springdoc:
   swagger-ui:
     path: /swagger-ui.html
   show-actuator: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when-authorized
+      roles: ADMIN
+      group:
+        readiness:
+          include: readinessState, db, redis, minio, keycloak
+  info:
+    env:
+      enabled: true
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING:1.0}
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_ENDPOINT:http://localhost:4318}/v1/traces
+  otlp:
+    metrics:
+      export:
+        url: ${OTEL_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 30s
+
+info:
+  app:
+    name: ${APP_NAME}
+    version: '@project.version@'
 
 keycloak:
   admin:
