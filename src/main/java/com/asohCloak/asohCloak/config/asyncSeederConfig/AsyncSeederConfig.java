@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.annotation.Order;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
@@ -24,6 +25,11 @@ import java.util.Map;
 @Component
 @RequiredArgsConstructor
 @Order(1)
+@ConditionalOnProperty(
+        name = "app.seeding.enabled",
+        havingValue = "true",
+        matchIfMissing = true
+)
 public class AsyncSeederConfig implements ApplicationRunner {
 
     private final Map<String, UserSeedCredential> userSeedCredentials;
@@ -33,57 +39,61 @@ public class AsyncSeederConfig implements ApplicationRunner {
 
     @Override
     public void run(@NonNull ApplicationArguments args) {
-        List<String> roleNames = Arrays.stream(UserRole.values())
-                .map(Enum::name)
-                .toList();
+        try {
+            List<String> roleNames = Arrays.stream(UserRole.values())
+                    .map(Enum::name)
+                    .toList();
 
-        log.info("Ensuring {} realm role(s) exist in Keycloak.", roleNames.size());
-        keycloakAuthService.ensureRealmRolesExist(roleNames);
-        log.info("Realm role provisioning complete.");
+            log.info("Ensuring {} realm role(s) exist in Keycloak.", roleNames.size());
+            keycloakAuthService.ensureRealmRolesExist(roleNames);
+            log.info("Realm role provisioning complete.");
 
-        log.info("User seeding started: {} role(s) configured.", userSeedCredentials.size());
+            log.info("User seeding started: {} role(s) configured.", userSeedCredentials.size());
 
-        int created = 0;
-        int reconciled = 0;
-        int skippedInvalid = 0;
-        int failed = 0;
+            int created = 0;
+            int reconciled = 0;
+            int skippedInvalid = 0;
+            int failed = 0;
 
-        for (Map.Entry<String, UserSeedCredential> entry : userSeedCredentials.entrySet()) {
-            String roleKey = entry.getKey();
-            UserSeedCredential credential = entry.getValue();
+            for (Map.Entry<String, UserSeedCredential> entry : userSeedCredentials.entrySet()) {
+                String roleKey = entry.getKey();
+                UserSeedCredential credential = entry.getValue();
 
-            if (credential == null || isBlank(credential.getEmail()) || isBlank(credential.getPassword())) {
-                log.warn("Skipping seed for '{}': email or password is missing or unresolved.", roleKey);
-                skippedInvalid++;
-                continue;
-            }
-
-            UserRole role = resolveRole(roleKey);
-            if (role == null) {
-                log.warn("Skipping seed for '{}': no matching UserRole enum constant found.", roleKey);
-                skippedInvalid++;
-                continue;
-            }
-
-            String email = credential.getEmail().trim().toLowerCase();
-
-            try {
-                boolean wasCreated = seedOrReconcile(roleKey, role, email, credential.getPassword());
-                if (wasCreated) {
-                    created++;
-                } else {
-                    reconciled++;
+                if (credential == null || isBlank(credential.getEmail()) || isBlank(credential.getPassword())) {
+                    log.warn("Skipping seed for '{}': email or password is missing or unresolved.", roleKey);
+                    skippedInvalid++;
+                    continue;
                 }
-            } catch (RuntimeException ex) {
-                log.error("Failed to seed/reconcile {} ({}): {}", email, role, ex.getMessage(), ex);
-                failed++;
-            }
-        }
 
-        log.info(
-                "User seeding complete. created={}, reconciled={}, skippedInvalid={}, failed={}",
-                created, reconciled, skippedInvalid, failed
-        );
+                UserRole role = resolveRole(roleKey);
+                if (role == null) {
+                    log.warn("Skipping seed for '{}': no matching UserRole enum constant found.", roleKey);
+                    skippedInvalid++;
+                    continue;
+                }
+
+                String email = credential.getEmail().trim().toLowerCase();
+
+                try {
+                    boolean wasCreated = seedOrReconcile(roleKey, role, email, credential.getPassword());
+                    if (wasCreated) {
+                        created++;
+                    } else {
+                        reconciled++;
+                    }
+                } catch (RuntimeException ex) {
+                    log.error("Failed to seed/reconcile {} ({}): {}", email, role, ex.getMessage(), ex);
+                    failed++;
+                }
+            }
+
+            log.info(
+                    "User seeding complete. created={}, reconciled={}, skippedInvalid={}, failed={}",
+                    created, reconciled, skippedInvalid, failed
+            );
+        } catch (RuntimeException ex) {
+            log.error("Startup seeding aborted; app will continue without it", ex);
+        }
     }
 
     private boolean seedOrReconcile(String roleKey, UserRole role, String email, String rawPassword) {

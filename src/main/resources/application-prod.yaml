@@ -1,4 +1,7 @@
 spring:
+  threads:
+    virtual:
+      enabled: true
   jpa:
     hibernate:
       ddl-auto: validate
@@ -16,12 +19,23 @@ logging:
 
 springdoc:
   swagger-ui:
-    enabled: false
+    enabled: true
   api-docs:
-    enabled: false
+    enabled: true
+
+app:
+  seeding:
+    enabled: ${APP_SEEDING_ENABLED:false}
 
 management:
+  otlp:
+    metrics:
+      export:
+        enabled: false
   tracing:
+    export:
+      otlp:
+        enabled: false
     sampling:
       probability: 0.1
 

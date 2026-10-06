@@ -21,6 +21,7 @@ public class KeycloakConfig {
 
         return RestClient.builder()
                 .baseUrl(keycloakProperties.getServerUrl())
+                .requestFactory(factory)
                 .build();
     }
 }

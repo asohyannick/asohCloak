@@ -1,6 +1,6 @@
 spring:
   profiles:
-    active: ${SPRING_PROFILES_ACTIVE:dev}
+    active: ${SPRING_PROFILES_ACTIVE:prod}
   config:
     import: "optional:file:.env[.properties]"
   cache:
@@ -31,10 +31,9 @@ spring:
 
   data:
     redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD}
-      timeout: 5s
+      ssl:
+        enabled: true
 
   flyway:
     locations: classpath:db/migration
@@ -49,7 +48,7 @@ spring:
           issuer-uri: ${KEYCLOAK_ISSUER_URI}
 
 server:
-  port: ${APP_PORT:40000}
+  port: ${PORT:40000}
   servlet:
     context-path: /api/${API_VERSION}
 

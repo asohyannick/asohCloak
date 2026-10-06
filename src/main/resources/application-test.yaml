@@ -1,4 +1,7 @@
 spring:
+  threads:
+    virtual:
+      enabled: true
   datasource:
     url: jdbc:postgresql://${DATABASE_POSTGRESQL_HOST:localhost}:${DATABASE_POSTGRESQL_PORT:5432}/${DATABASE_POSTGRESQL_NAME:asohcloak_test}
 
